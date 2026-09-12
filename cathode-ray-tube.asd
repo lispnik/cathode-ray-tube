@@ -44,6 +44,13 @@ and terminal emulation by a vendored libvterm."
                    (:file "protocol")
                    (:file "ffi")
                    (:file "libvterm")))
+     (:module "pty"
+      :serial t
+      :components ((:file "pty")
+                   (:file "shell")))
+     (:module "terminal"
+      :serial t
+      :components ((:file "terminal")))
      (:module "metal"
       :serial t
       :components ((:file "package")
@@ -71,6 +78,8 @@ and terminal emulation by a vendored libvterm."
                  (:file "math-tests")
                  (:file "color-tests")
                  (:file "vt-tests")
+                 (:file "pty-tests")
+                 (:file "terminal-tests")
                  (:file "metal-tests")
                  (:file "ui-tests"))))
   ;; FIVEAM:RUN! prints failures and returns NIL, and ASDF discards what a

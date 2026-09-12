@@ -84,6 +84,34 @@
    #:vt-color-default-fg-p #:vt-color-default-bg-p
    #:resolve-color #:+default-palette+))
 
+(defpackage #:cathode-ray-tube.pty
+  (:use #:cl)
+  (:nicknames #:crt.pty)
+  (:local-nicknames (#:util #:cathode-ray-tube.util))
+  (:export
+   #:pty #:pty-p #:pty-fd #:pty-pid #:pty-alive-p
+   #:spawn-pty #:pty-close #:pty-read #:pty-write #:pty-reap
+   #:set-winsize #:get-winsize
+   #:default-shell #:login-shell-arguments #:shell-command #:child-environment))
+
+(defpackage #:cathode-ray-tube.terminal
+  (:use #:cl)
+  (:nicknames #:crt.terminal)
+  (:local-nicknames (#:util #:cathode-ray-tube.util)
+                    (#:vt #:cathode-ray-tube.vt)
+                    (#:pty #:cathode-ray-tube.pty))
+  (:export
+   #:terminal #:make-terminal #:terminal-close
+   #:terminal-vt #:terminal-pty #:terminal-lock
+   #:terminal-rows #:terminal-cols #:terminal-resize
+   #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
+   #:terminal-send #:terminal-send-string
+   #:with-terminal-locked #:terminal-take-dirty #:terminal-title
+   #:terminal-snapshot #:snapshot #:snapshot-p
+   #:snapshot-rows #:snapshot-cols #:snapshot-cells #:snapshot-dirty
+   #:snapshot-cursor-row #:snapshot-cursor-col #:snapshot-cursor-visible
+   #:snapshot-painted))
+
 (defpackage #:cathode-ray-tube.ui
   (:use #:cl)
   (:nicknames #:crt.ui)
