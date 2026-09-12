@@ -1,0 +1,20 @@
+# Build products
+/bin/
+/build/
+/dist/
+*.fasl
+*.o
+
+# The vendored dylib and its installed headers are BUILT, not checked in --
+# vendor/libvterm/ and vendor/shim/ are the sources and are tracked.
+/vendor/lib/
+/vendor/include/
+
+# Compiled shaders
+/res/shaders/*.metallib
+/res/shaders/*.air
+
+# ocicl vendors dependency source here; ocicl.csv pins them and IS tracked.
+/ocicl/
+
+.DS_Store
