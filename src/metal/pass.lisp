@@ -69,13 +69,18 @@ serves an offscreen pass and the one that reaches the screen."
 (defmacro with-render-pass ((encoder target &key (buffer '(command-buffer))
                                                  (load '+load-action-clear+)
                                                  (clear ''(0d0 0d0 0d0 1d0))
-                                                 viewport label)
+                                                 viewport label present)
                             &body body)
   "Encode a pass into TARGET, binding ENCODER for BODY.
 
 The command buffer is committed and WAITED ON when BODY returns -- see the
 header for why there is no completion handler.  Pass :BUFFER to encode several
-passes into one buffer, in which case the caller commits."
+passes into one buffer, in which case the caller commits.
+
+PRESENT is the CAMetalDrawable to hand the window server, for the one pass per
+frame that reaches the screen.  It is presented BEFORE the commit, which is the
+only order that works: -presentDrawable: schedules the present on the buffer,
+so a buffer already committed has nothing left to attach it to."
   (let ((cb (gensym "CB")) (own (gensym "OWN")) (tgt (gensym "TARGET")))
     `(with-metal
        (let* ((,tgt ,target)
@@ -98,6 +103,7 @@ passes into one buffer, in which case the caller commits."
                    (objc:invoke ,encoder "setViewport:" vp))))
          (unwind-protect (progn ,@body)
            (objc:invoke ,encoder "endEncoding"))
+         ,@(when present `((objc:invoke ,cb "presentDrawable:" ,present)))
          (when ,own
            (objc:invoke ,cb "commit")
            (objc:invoke ,cb "waitUntilCompleted"))

@@ -26,7 +26,7 @@
   (:local-nicknames (#:util #:cathode-ray-tube.util))
   (:export
    ;; device
-   #:with-metal #:ensure-metal #:metal-available-p #:default-device #:device-name
+   #:with-metal #:ensure-frameworks #:ensure-metal #:metal-available-p #:default-device #:device-name
    #:command-queue #:command-buffer #:reset-device #:null-object-p
    #:*device* #:*queue*
    ;; resources
@@ -56,3 +56,24 @@
    #:+data-type-float+ #:+data-type-int+ #:+data-type-bool+
    #:+filter-nearest+ #:+filter-linear+
    #:+address-clamp-to-edge+ #:+address-repeat+))
+
+(defpackage #:cathode-ray-tube.ui
+  (:use #:cl)
+  (:nicknames #:crt.ui)
+  (:local-nicknames (#:util #:cathode-ray-tube.util))
+  (:export
+   #:ensure-appkit #:handling-errors #:run
+   #:crt-view #:view-layer #:view-link #:view-frame-skip #:view-effect-time
+   #:view-frames #:view-drawable-size #:view-draw-function
+   #:attach-metal-layer #:start-display-link #:stop-display-link #:step-frame
+   #:crt-window #:crt-window-p #:crt-window-handle #:crt-window-view
+   #:make-crt-window #:show-crt-window #:close-crt-window #:*windows*
+   #:make-menu-bar #:gradient-frame))
+
+(defpackage #:cathode-ray-tube
+  (:use #:cl)
+  (:nicknames #:crt)
+  (:local-nicknames (#:util #:cathode-ray-tube.util)
+                    (#:metal #:cathode-ray-tube.metal)
+                    (#:ui #:cathode-ray-tube.ui))
+  (:export #:main))

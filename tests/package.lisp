@@ -19,7 +19,8 @@
 (defpackage #:cathode-ray-tube/tests
   (:use #:cl #:fiveam)
   (:local-nicknames (#:util #:cathode-ray-tube.util)
-                    (#:metal #:cathode-ray-tube.metal))
+                    (#:metal #:cathode-ray-tube.metal)
+                    (#:ui #:cathode-ray-tube.ui))
   (:export #:run-tests #:all))
 
 (in-package #:cathode-ray-tube/tests)
@@ -29,6 +30,7 @@
 (def-suite math :in all :description "utils.js and fontmanager.cpp arithmetic.")
 (def-suite color :in all :description "Colour, including the /256.")
 (def-suite metal :in all :description "Metal. Skips without a GPU.")
+(def-suite ui :in all :description "Windows. Skips without a window server.")
 
 (defun gpu-or-skip ()
   "True when there is a Metal device; otherwise SKIP and return NIL."
@@ -51,7 +53,8 @@ and the difference would only surface as a bug reaching a release."
     (multiple-value-bind (ok failed skipped) (results-status results)
       (format t "~&~%~D check~:P: ~D failed, ~D skipped.~%"
               (length results) (length failed) (length skipped))
-      (when skipped
-        (format t "skipped:~%~{  ~A~%~}"
-                (mapcar (lambda (r) (name (test-case r))) skipped)))
+      ;; The names and reasons are not dug out of the result objects: those
+      ;; accessors are FiveAM internals, and EXPLAIN! above has already printed
+      ;; both.  The count is here because it is the number a CI log should be
+      ;; grepped for.
       ok)))

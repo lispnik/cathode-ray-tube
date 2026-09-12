@@ -32,7 +32,7 @@ RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 	  --eval '$(REGISTRY)'
 
 .PHONY: all deps vendor check-vendor probe constants check-metal-constants \
-        test repl clean distclean
+        test run repl clean distclean
 
 all: deps
 
@@ -89,6 +89,12 @@ test: $(DYLIB)
 	$(RUNLISP) \
 	  --eval '(asdf:load-system :cathode-ray-tube/tests)' \
 	  --eval '(uiop:quit (if (cathode-ray-tube/tests:run-tests) 0 1))'
+
+# Opens a window and blocks.  AppKit owns the thread once this starts.
+run: $(DYLIB)
+	$(RUNLISP) \
+	  --eval '(asdf:load-system :cathode-ray-tube)' \
+	  --eval '(cathode-ray-tube:main)'
 
 repl: $(DYLIB)
 	$(LISP) --no-userinit --no-sysinit \

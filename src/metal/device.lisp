@@ -3,16 +3,35 @@
 (in-package #:cathode-ray-tube.metal)
 
 (defparameter +frameworks+
-  '("/System/Library/Frameworks/Metal.framework/Metal"
+  '("/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"
+    "/System/Library/Frameworks/Metal.framework/Metal"
     "/System/Library/Frameworks/QuartzCore.framework/QuartzCore"
-    "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
-  "Loaded before anything else touches Metal.  OBJC:DEFINE-OBJC-CLASS queues
-class registration until initialisation, so every framework whose classes we
-subclass or instantiate must be named by then -- lem-cocoa/main.lisp states the
-rule and this is the same discipline.")
+    "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+    "/System/Library/Frameworks/CoreText.framework/CoreText")
+  "EVERY framework this program uses, named in ONE place.
+
+AppKit is in a list that belongs to the Metal layer, which looks wrong and is
+not.  OBJC:ENSURE-OBJC-INITIALIZED is process-global and happens ONCE: the first
+call flushes the queue of classes DEFINE-OBJC-CLASS has been accumulating, and a
+class whose superclass is not loaded by that moment has no superclass, for the
+rest of the process.  A later call with more modules does not go back and fix it.
+
+So a partial list is not merely incomplete, it is a trap -- and it was a real
+one.  With Metal alone here, the first thing to ask for a device initialised
+objc, the queue flushed, CathodeRayTubeView could not find NSView, and the error
+surfaced as `no Metal device on this machine' from METAL-AVAILABLE-P, whose
+handler-case was swallowing it, and separately as `Attempting to make an
+instance of a class which does not exist' from the window test.  One cause, two
+symptoms, neither of them naming the real problem.
+
+lem-cocoa/main.lisp states the rule; this is what ignoring it looks like.")
+
+(defun ensure-frameworks ()
+  "Bring the Objective-C runtime up with every framework loaded.  Idempotent."
+  (objc:ensure-objc-initialized :modules +frameworks+))
 
 (defun ensure-metal ()
-  (objc:ensure-objc-initialized :modules +frameworks+))
+  (ensure-frameworks))
 
 (cffi:defcfun ("MTLCreateSystemDefaultDevice" %create-system-default-device) :pointer)
 
@@ -44,7 +63,13 @@ masks it for you.  Every plain C entry point in this program is wrapped."
 
 A virtualised runner may not, and that is a fact about the machine rather than
 about this code -- so the GPU tests SKIP on it, which is the discipline objc's
-own suite follows."
+own suite follows.
+
+Initialisation happens OUTSIDE the handler-case, deliberately.  A framework that
+will not load, or a class registration that failed, is a bug in this program and
+must not be reported as `there is no GPU here' -- which is exactly what it did
+report, once, and it cost an hour."
+  (ensure-frameworks)
   (handler-case (and (default-device) t)
     (error () nil)))
 

@@ -25,7 +25,7 @@ and terminal emulation by a vendored libvterm."
   :version "0.1.0"
   :homepage "https://github.com/lispnik/cathode-ray-tube"
   :depends-on (#:objc #:cffi #:babel #:bordeaux-threads #:alexandria
-               #:float-features #:com.inuoe.jzon)
+               #:float-features #:com.inuoe.jzon #:trivial-main-thread)
   :serial t
   :components
   ((:module "src"
@@ -45,7 +45,14 @@ and terminal emulation by a vendored libvterm."
                    (:file "device")
                    (:file "resources")
                    (:file "library")
-                   (:file "pass")))))))
+                   (:file "pass")))
+     (:module "ui"
+      :serial t
+      :components ((:file "frameworks")
+                   (:file "view")
+                   (:file "window")
+                   (:file "app")))
+     (:file "main")))))
 
 (asdf:defsystem #:cathode-ray-tube/tests
   :description "The FiveAM suite."
@@ -57,7 +64,8 @@ and terminal emulation by a vendored libvterm."
     :components ((:file "package")
                  (:file "math-tests")
                  (:file "color-tests")
-                 (:file "metal-tests"))))
+                 (:file "metal-tests")
+                 (:file "ui-tests"))))
   ;; FIVEAM:RUN! prints failures and returns NIL, and ASDF discards what a
   ;; TEST-OP returns -- which is exactly how a suite goes green with failing
   ;; tests.  The exit status comes from RUN-TESTS instead.
