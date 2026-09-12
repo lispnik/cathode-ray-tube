@@ -26,17 +26,13 @@ REGISTRY = (asdf:initialize-source-registry \
 # prints a compiler note.  They are a property of the bridge, not of this code.
 QUIET = (proclaim (quote (sb-ext:muffle-conditions sb-ext:compiler-note style-warning)))
 
-# The dylib is dlopen'd by name, so it has to be findable.  In a bundle
-# asdf-macos-app puts it in Contents/Frameworks and pushes that directory onto
-# cffi:*foreign-library-directories*; from a checkout, this does the same.
-LOADPATH = (push (truename "$(VENDOR)/lib/") cffi:*foreign-library-directories*)
-
 RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 	  --eval '(require :asdf)' \
 	  --eval '$(QUIET)' \
 	  --eval '$(REGISTRY)'
 
-.PHONY: all deps vendor probe test repl clean distclean
+.PHONY: all deps vendor check-vendor probe constants check-metal-constants \
+        test repl clean distclean
 
 all: deps
 
@@ -66,15 +62,31 @@ probe: $(DYLIB)
 	$(RUNLISP) \
 	  --eval '(asdf:load-system :objc)' \
 	  --eval '(asdf:load-system :babel)' \
-	  --eval '$(LOADPATH)' \
+	  --eval '(push (truename "$(VENDOR)/lib/") cffi:*foreign-library-directories*)' \
 	  --load tools/probe.lisp \
 	  --eval '(uiop:quit (if (crt-probe:run) 0 1))'
+
+# --- generated sources -------------------------------------------------------
+
+# Metal's enumerations, read out of the SDK rather than remembered.  `objc' has
+# no constant tables and will not grow any -- it sends messages, and a message
+# does not know what 70 means -- so the numbers have to come from somewhere.  A
+# typo in a hand-copied table does not raise an error; it gets you a pipeline
+# that builds, a texture that allocates, and a black window.
+constants:
+	tools/metal-constants.sh > /tmp/crt-constants.sexp
+	@echo "regenerate src/metal/constants.lisp from /tmp/crt-constants.sexp"
+
+# Asserted by the suite too; this is the one-line form for a workflow.
+check-metal-constants:
+	@$(RUNLISP) \
+	  --eval '(asdf:load-system :cathode-ray-tube/tests)' \
+	  --eval '(uiop:quit (if (fiveam:run! (quote cathode-ray-tube/tests::metal-constants-match-the-sdk)) 0 1))'
 
 # --- the suite ---------------------------------------------------------------
 
 test: $(DYLIB)
 	$(RUNLISP) \
-	  --eval '$(LOADPATH)' \
 	  --eval '(asdf:load-system :cathode-ray-tube/tests)' \
 	  --eval '(uiop:quit (if (cathode-ray-tube/tests:run-tests) 0 1))'
 
@@ -83,7 +95,6 @@ repl: $(DYLIB)
 	  --eval '(require :asdf)' \
 	  --eval '$(QUIET)' \
 	  --eval '$(REGISTRY)' \
-	  --eval '$(LOADPATH)' \
 	  --eval '(asdf:load-system :cathode-ray-tube)'
 
 # --- housekeeping ------------------------------------------------------------
