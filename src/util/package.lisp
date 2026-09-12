@@ -57,6 +57,33 @@
    #:+filter-nearest+ #:+filter-linear+
    #:+address-clamp-to-edge+ #:+address-repeat+))
 
+(defpackage #:cathode-ray-tube.vt
+  (:use #:cl)
+  (:nicknames #:crt.vt)
+  (:local-nicknames (#:util #:cathode-ray-tube.util))
+  (:export
+   ;; the backend protocol -- everything above this package talks to these and
+   ;; never to CFFI, so a different terminal core is a file rather than a rewrite
+   #:vt #:make-vt #:vt-close
+   #:vt-write #:vt-resize #:vt-reset
+   #:vt-rows #:vt-cols #:vt-cell #:vt-row-cells #:vt-cursor
+   #:vt-dirty-rows #:vt-dirty-p #:vt-clear-dirty #:vt-damage-all
+   #:vt-text #:vt-scrollback-length #:vt-scrollback-line
+   #:vt-title #:vt-bell-count #:vt-output-hook
+   ;; cells
+   #:cell #:make-cell #:cell-p #:copy-cell
+   #:cell-char #:cell-combining #:cell-width
+   #:cell-fg #:cell-bg #:cell-attrs
+   #:cell-blank-p
+   #:+attr-bold+ #:+attr-underline+ #:+attr-italic+ #:+attr-blink+
+   #:+attr-reverse+ #:+attr-conceal+ #:+attr-strike+
+   #:attr-set-p #:cell-underline-style
+   ;; colours
+   #:vt-color #:vt-color-p #:vt-color-indexed-p #:vt-color-index
+   #:vt-color-red #:vt-color-green #:vt-color-blue
+   #:vt-color-default-fg-p #:vt-color-default-bg-p
+   #:resolve-color #:+default-palette+))
+
 (defpackage #:cathode-ray-tube.ui
   (:use #:cl)
   (:nicknames #:crt.ui)
