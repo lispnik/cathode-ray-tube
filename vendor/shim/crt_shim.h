@@ -98,6 +98,19 @@ size_t crt_screen_get_text(const VTermScreen *screen, char *str, size_t len,
  * So it fails loudly rather than silently -- but it fails, and the child never
  * learns its size.  Declared non-variadic here, it simply works.
  *
+ * CFFI is the constraint, not the ABI, and that distinction was worth measuring
+ * rather than assuming.  SB-ALIEN *can* make this call: splicing &optional into
+ * the alien signature ahead of the variadic arguments produces a genuine Darwin
+ * arm64 variadic call, and the same ioctl that returns -1 fixed-arity then
+ * returns 0 and the kernel reports the size it was given.  Verified against a
+ * live pty, both ways.  objc/src/abi.lisp does exactly this in BUILD-TRAMPOLINE,
+ * where its N-FIXED argument is the count of arguments before the splice.
+ *
+ * So this function is here for PORTABILITY, not necessity.  src/pty/ and src/vt/
+ * are free of implementation-specific packages so that they load and are tested
+ * on ECL -- and sb-alien in either of them would work perfectly on SBCL while
+ * quietly costing the whole ECL leg.  tests/seam-tests.lisp enforces that.
+ *
  * Returns the ioctl result: 0 on success, -1 with errno set. */
 int crt_set_winsize(int fd, int rows, int cols);
 
