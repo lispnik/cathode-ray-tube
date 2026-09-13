@@ -1,0 +1,121 @@
+# SBCL on macOS, on both architectures.
+#
+# macOS is the only platform here because this program is macOS-only by
+# construction: it binds AppKit, Metal and CoreText, and its whole subject is a
+# Cocoa window.
+#
+# The Intel leg is not box-ticking.  The two architectures genuinely differ in
+# the Objective-C ABI -- BOOL encodes as 'c' on x86-64 and 'B' on Apple silicon,
+# and a structure result over 16 bytes goes through objc_msgSend_stret on Intel,
+# a function that does not exist on arm64 -- and this program passes MTLViewport,
+# MTLRegion and MTLClearColor by value on every frame.
+#
+# WHAT A GREEN RUN PROVES, and what it does not.  The Tier 2 suite needs a Metal
+# device and Tier 3 needs a window server; both SKIP where there is none, and
+# the skip count is printed.  A runner without a GPU therefore goes green having
+# tested rather less than one with -- so the count is echoed into the summary,
+# where a change is visible rather than silent.
+#
+# The label matters: macos-13, the old free Intel image, has been retired, and a
+# job labelled with it is never assigned a runner.  It QUEUES INDEFINITELY
+# rather than failing, so the workflow never reports at all.
+
+name: macOS
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: sbcl · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install SBCL
+        run: brew install sbcl
+
+      # The vendored C library: libvterm plus the shim, built by cc.  No zig, no
+      # cmake, no pkg-config, and nothing downloaded -- the sources are in the
+      # repository, so this cannot fail because a mirror was down.
+      - name: Build the vendored library
+        run: |
+          make -C vendor
+          make -C vendor check
+
+      - name: Install ocicl
+        run: |
+          git clone --depth 1 https://github.com/ocicl/ocicl.git "$HOME/ocicl-src"
+          ( cd "$HOME/ocicl-src" && sbcl --non-interactive --load setup.lisp )
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        run: |
+          ocicl setup
+          # ocicl exits 0 when a download fails, and ghcr.io fails often enough
+          # to matter: objc's own workflow records two runs in one afternoon
+          # losing a package and surfacing it two steps later as "Component not
+          # found", pointing at the library rather than at the download.  So:
+          # several attempts, and a failure HERE, on the line that names it.
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee ocicl-install.log
+            grep -q "failed to install" ocicl-install.log || break
+            echo "::warning::ocicl install attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" ocicl-install.log; then
+            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+            exit 1
+          fi
+
+      # The one thing CI is uniquely able to catch: :DEFSYSTEM-DEPENDS-ON
+      # resolves when a .asd is READ, so a bundle declaration in the wrong file
+      # makes asdf-macos-app a hard requirement for merely loading the library.
+      # Anyone who has both installed will never see it.
+      - name: The library must load without asdf-macos-app
+        run: make test-no-bundle
+
+      # Metal's enumerations are generated from the SDK headers rather than
+      # remembered, and this asserts the checked-in table still agrees with the
+      # SDK on the machine doing the building.
+      - name: Metal constants still match the SDK
+        run: make check-metal-constants
+
+      - name: Report the environment the tests will see
+        run: |
+          sbcl --non-interactive --no-userinit --no-sysinit \
+            --eval '(require :asdf)' \
+            --eval '(proclaim (quote (sb-ext:muffle-conditions sb-ext:compiler-note style-warning)))' \
+            --eval '(asdf:initialize-source-registry (list :source-registry (list :tree (truename "./")) :ignore-inherited-configuration))' \
+            --eval '(asdf:load-system :cathode-ray-tube)' \
+            --eval '(format t "~&sbcl:          ~A~%arch:          ~A~%core-compressed: ~A~%window server: ~A~%metal device:  ~A~%"
+                            (lisp-implementation-version) (machine-type)
+                            (and (find :sb-core-compression *features*) t)
+                            (objc.runloop:window-server-p)
+                            (or (crt.metal:device-name) "none"))'
+
+      - name: Run the suite
+        run: make test
+
+      - name: Build the bundle
+        run: make app
+
+      - name: Check the bundle
+        run: make check-app
+
+      - name: Upload the bundle
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cathode-ray-tube-app-${{ matrix.os }}
+          path: build/cathode-ray-tube.app
+          retention-days: 7

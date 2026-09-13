@@ -18,8 +18,9 @@ tearing and a procedural bezel — under any of the fourteen ported profiles.
 
 ![Default Amber](docs/gallery/default-amber.png)
 
-`make test` is 340 checks. Still to come: the font manager, a settings window,
-and the signed installer.
+`make test` is 340 checks; `make app` builds a bundle and `make release` a
+signed, notarised disk image. Still to come: the font manager and a settings
+window.
 
 ## Building
 

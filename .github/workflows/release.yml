@@ -1,0 +1,232 @@
+# A signed, notarised, stapled disk image, on a tag.
+#
+# TWO RELEASE BLOCKERS, both of which fail slowly and neither of which is
+# obvious:
+#
+#   SBCL MUST BE BUILT --without-sb-core-compression.  Homebrew's enables zstd
+#   core compression and therefore links /opt/homebrew/lib/libzstd.dylib.  Such a
+#   bundle notarises PERFECTLY WELL and then dies with a dyld error on a Mac that
+#   has never had Homebrew: Apple checks the signature, not whether your dylibs
+#   exist on someone else's disk.  So this builds SBCL from source and caches it.
+#
+#   `security set-key-partition-list' is not optional.  Without it codesign
+#   blocks on a UI authorisation prompt that no runner can answer, and the job
+#   hangs until the timeout rather than failing.
+#
+# NO UNIVERSAL BINARY.  There is no universal SBCL core, so this ships one disk
+# image per architecture and says so in the release notes.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and sign, but do not notarise or publish"
+        type: boolean
+        default: true
+
+env:
+  SBCL_VERSION: "2.5.11"
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86-64
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # --- a distributable SBCL ------------------------------------------------
+
+      - name: Cache SBCL
+        id: sbcl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/sbcl
+          key: sbcl-${{ env.SBCL_VERSION }}-${{ runner.os }}-${{ runner.arch }}-nocompression
+
+      - name: Build SBCL without core compression
+        if: steps.sbcl-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # A host Lisp to build with; the result does not depend on it.
+          brew install sbcl
+          curl -fsSL -o "$RUNNER_TEMP/sbcl.tar.bz2" \
+            "https://downloads.sourceforge.net/project/sbcl/sbcl/${SBCL_VERSION}/sbcl-${SBCL_VERSION}-source.tar.bz2"
+          mkdir -p "$RUNNER_TEMP/sbcl-src"
+          tar xjf "$RUNNER_TEMP/sbcl.tar.bz2" -C "$RUNNER_TEMP/sbcl-src" --strip-components=1
+          cd "$RUNNER_TEMP/sbcl-src"
+          # The point of the whole step.  Everything else here is scaffolding.
+          sh make.sh --fancy --without-sb-core-compression --prefix="$HOME/.local/sbcl"
+          sh install.sh
+          brew uninstall --ignore-dependencies sbcl || true
+
+      - name: Put SBCL on the path and prove it is clean
+        run: |
+          echo "$HOME/.local/sbcl/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/sbcl/bin:$PATH"
+          export SBCL_HOME="$HOME/.local/sbcl/lib/sbcl"
+          echo "SBCL_HOME=$SBCL_HOME" >> "$GITHUB_ENV"
+          sbcl --version
+          echo "the runtime links:"
+          otool -L "$HOME/.local/sbcl/bin/sbcl" | tail -n +2
+          # The guard, stated where it is cheap.  A runtime linking anything
+          # outside /usr/lib and /System is one that will not run elsewhere.
+          if otool -L "$HOME/.local/sbcl/bin/sbcl" | tail -n +2 \
+               | grep -v '/usr/lib/' | grep -v '/System/' | grep -q .; then
+            echo "::error::this SBCL links something outside /usr/lib and /System" >&2
+            exit 1
+          fi
+
+      # --- dependencies --------------------------------------------------------
+
+      - name: Build the vendored library
+        run: make -C vendor && make -C vendor check
+
+      - name: Install ocicl
+        run: |
+          git clone --depth 1 https://github.com/ocicl/ocicl.git "$HOME/ocicl-src"
+          ( cd "$HOME/ocicl-src" && sbcl --non-interactive --load setup.lisp )
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        run: |
+          ocicl setup
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee ocicl-install.log
+            grep -q "failed to install" ocicl-install.log || break
+            echo "::warning::ocicl install attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" ocicl-install.log; then
+            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+            exit 1
+          fi
+
+      - name: Run the suite
+        run: make test
+
+      # --- signing -------------------------------------------------------------
+
+      - name: Import the Developer ID
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          echo "$MACOS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # THE LINE EVERYONE FORGETS.  Without it codesign blocks on a UI
+          # authorisation prompt no runner can answer, and the job hangs until
+          # the timeout rather than failing with anything you could act on.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
+          security find-identity -v -p codesigning
+
+      - name: Store the notary credentials
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          # An APP-SPECIFIC password from appleid.apple.com, not the Apple ID
+          # password.
+          xcrun notarytool store-credentials cathode-ray-tube \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" --keychain build.keychain
+
+      # --- the artefact --------------------------------------------------------
+
+      - name: Build the bundle
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: make app SIGN_IDENTITY="$SIGN_IDENTITY"
+
+      - name: Check the bundle
+        run: make check-app
+
+      - name: Notarise and staple the bundle
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: make notarize SIGN_IDENTITY="$SIGN_IDENTITY"
+
+      - name: Build the disk image
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: make dmg SIGN_IDENTITY="$SIGN_IDENTITY"
+
+      # The DMG is notarised and stapled IN ITS OWN RIGHT.  Stapling only the
+      # app leaves the DOWNLOAD unrecognised, so the first thing a user touches
+      # is the thing Gatekeeper complains about.
+      - name: Notarise and staple the disk image
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: make notarize-dmg SIGN_IDENTITY="$SIGN_IDENTITY"
+
+      - name: Upload the disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: cathode-ray-tube-${{ matrix.arch }}
+          path: dist/*.dmg
+          retention-days: 14
+
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain build.keychain || true
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          generate_release_notes: true
+          body: |
+            A terminal emulator that looks like a cathode-ray tube.
+
+            **One disk image per architecture.** There is no universal SBCL
+            core, so `arm64` is for Apple silicon and `x86-64` for Intel Macs.
+
+            Both are signed with a Developer ID, notarised by Apple, and
+            stapled -- the disk image as well as the application inside it, so
+            Gatekeeper is satisfied by the thing you actually download.
+
+            Requires macOS 14 or later: the frame clock is a `CADisplayLink`.
+
+            cathode-ray-tube is a port of
+            [cool-retro-term](https://github.com/Swordfish90/cool-retro-term)
+            by Filippo Scognamiglio, and is GPL-3 for that reason.

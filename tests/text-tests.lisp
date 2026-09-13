@@ -10,34 +10,34 @@
 
 (defun test-font ()
   "A bundled face at its native size, or NIL when the assets are missing."
-  (let ((path (text:bundled-font-path :ibm-vga-8x16)))
+  (let ((path (crt.text:bundled-font-path :ibm-vga-8x16)))
     (when (probe-file path)
-      (text:load-font path :pixel-size 16))))
+      (crt.text:load-font path :pixel-size 16))))
 
 (defmacro with-text-renderer ((renderer font &key (width 256) (height 128)) &body body)
   `(let* ((,font (test-font)))
      (if (null ,font)
          (skip "the bundled fonts are not present")
-         (let ((,renderer (text:make-text-renderer :font ,font :width ,width
+         (let ((,renderer (crt.text:make-text-renderer :font ,font :width ,width
                                                    :height ,height)))
            (unwind-protect (progn ,@body)
-             (text:release-text-renderer ,renderer)
-             (text:release-font ,font))))))
+             (crt.text:release-text-renderer ,renderer)
+             (crt.text:release-font ,font))))))
 
 (defun snapshot-of (renderer string &key (cursor nil))
   "A SNAPSHOT with STRING on row 0, sized to RENDERER's grid."
-  (let* ((cols (text::text-renderer-cols renderer))
-         (rows (text::text-renderer-rows renderer))
+  (let* ((cols (crt.text::text-renderer-cols renderer))
+         (rows (crt.text::text-renderer-rows renderer))
          (cells (let ((grid (make-array rows)))
                   (dotimes (r rows grid)
                     (setf (aref grid r)
                           (let ((row (make-array cols)))
                             (dotimes (c cols row)
-                              (setf (aref row c) (vt:make-cell)))))))))
+                              (setf (aref row c) (crt.vt:make-cell)))))))))
     (loop for ch across string
           for i from 0 below cols
-          do (setf (vt:cell-char (aref (aref cells 0) i)) ch))
-    (term:make-snapshot :rows rows :cols cols :cells cells
+          do (setf (crt.vt:cell-char (aref (aref cells 0) i)) ch))
+    (crt.terminal:make-snapshot :rows rows :cols cols :cells cells
                         :dirty (make-array rows :element-type 'bit :initial-element 1)
                         :cursor-visible (and cursor t)
                         :cursor-row 0 :cursor-col (or cursor 0))))
@@ -46,7 +46,7 @@
   "True when any pixel in the box is not black."
   (loop for y from y0 below y1
           thereis (loop for x from x0 below x1
-                          thereis (let ((p (metal:texture-pixel pixels texture x y)))
+                          thereis (let ((p (crt.metal:texture-pixel pixels texture x y)))
                                     (or (> (first p) 8) (> (second p) 8)
                                         (> (third p) 8))))))
 
@@ -56,48 +56,48 @@
         (skip "the bundled fonts are not present")
         (unwind-protect
              (progn
-               (is (not (null (text:font-handle font))))
-               (is (> (text:font-cell-width font) 0) "cell width must be positive")
-               (is (> (text:font-cell-height font) 0) "cell height must be positive")
-               (is (> (text:font-ascent font) 0))
+               (is (not (null (crt.text:font-handle font))))
+               (is (> (crt.text:font-cell-width font) 0) "cell width must be positive")
+               (is (> (crt.text:font-cell-height font) 0) "cell height must be positive")
+               (is (> (crt.text:font-ascent font) 0))
                ;; A monospace face: M and i must advance identically, which is
                ;; the property the whole grid depends on.
-               (let ((m (text::glyph-for-character font #\M))
-                     (i (text::glyph-for-character font #\i)))
+               (let ((m (crt.text::glyph-for-character font #\M))
+                     (i (crt.text::glyph-for-character font #\i)))
                  (is (plusp m) "the face has no M")
-                 (is (= (text:font-advance font m) (text:font-advance font i))
+                 (is (= (crt.text:font-advance font m) (crt.text:font-advance font i))
                      "a monospace face must advance M and i the same")))
-          (text:release-font font)))))
+          (crt.text:release-font font)))))
 
 (test atlas-rasterises-and-caches
   (when (gpu-or-skip)
     (let ((font (test-font)))
       (if (null font)
           (skip "the bundled fonts are not present")
-          (let ((atlas (text:make-atlas :width 256 :height 256)))
+          (let ((atlas (crt.text:make-atlas :width 256 :height 256)))
             (unwind-protect
-                 (let ((a (text:atlas-glyph atlas font #\A))
-                       (a-again (text:atlas-glyph atlas font #\A))
-                       (space (text:atlas-glyph atlas font #\Space)))
+                 (let ((a (crt.text:atlas-glyph atlas font #\A))
+                       (a-again (crt.text:atlas-glyph atlas font #\A))
+                       (space (crt.text:atlas-glyph atlas font #\Space)))
                    (is (eq a a-again) "a glyph must be rasterised once")
-                   (is (plusp (text:glyph-width a)) "A should have ink")
-                   (is (zerop (text:glyph-width space))
+                   (is (plusp (crt.text:glyph-width a)) "A should have ink")
+                   (is (zerop (crt.text:glyph-width space))
                        "a space has no ink and must not take atlas space")
-                   (is (plusp (text:glyph-advance space))
+                   (is (plusp (crt.text:glyph-advance space))
                        "but it still advances the pen"))
-              (text:release-atlas atlas)
-              (text:release-font font)))))))
+              (crt.text:release-atlas atlas)
+              (crt.text:release-font font)))))))
 
 (test text-lands-where-it-should
   "Draw \"A\" in the top-left cell and check the ink is there and nowhere else."
   (when (gpu-or-skip)
     (with-text-renderer (renderer font :width 256 :height 128)
-      (let* ((target (text:render-text renderer (snapshot-of renderer "A")
+      (let* ((target (crt.text:render-text renderer (snapshot-of renderer "A")
                                        :default-fg '(255 255 255)
                                        :default-bg '(0 0 0)))
-             (pixels (metal:texture-bytes target))
-             (cw (ceiling (text:font-cell-width font)))
-             (ch (ceiling (text:font-cell-height font))))
+             (pixels (crt.metal:texture-bytes target))
+             (cw (ceiling (crt.text:font-cell-width font)))
+             (ch (ceiling (crt.text:font-cell-height font))))
         (is (any-ink-p pixels target 0 0 cw ch)
             "no ink in the first cell -- the glyph did not land")
         ;; Column 3 is empty, so it must be black.  This is the assertion that
@@ -117,10 +117,10 @@ frame-reflection mask, so a background that wrote 0 would silently drop the cell
 out of the bloom -- which looks like 'bloom is wrong' and is not."
   (when (gpu-or-skip)
     (with-text-renderer (renderer font :width 256 :height 128)
-      (let* ((target (text:render-text renderer (snapshot-of renderer "X")
+      (let* ((target (crt.text:render-text renderer (snapshot-of renderer "X")
                                        :default-bg '(0 0 0)))
-             (pixels (metal:texture-bytes target)))
-        (is (= 255 (fourth (metal:texture-pixel pixels target 2 2)))
+             (pixels (crt.metal:texture-bytes target)))
+        (is (= 255 (fourth (crt.metal:texture-pixel pixels target 2 2)))
             "a drawn cell must be opaque")))))
 
 (test profile-background-is-not-painted-here
@@ -136,10 +136,10 @@ profiles."
       ;; still come back black, because cells with no content draw a background
       ;; quad in the terminal's OWN colours, and a blank default is black.
       (let* ((snapshot (snapshot-of renderer ""))
-             (target (text:render-text renderer snapshot
+             (target (crt.text:render-text renderer snapshot
                                        :default-bg '(255 0 255)))
-             (pixels (metal:texture-bytes target))
-             (corner (metal:texture-pixel pixels target 1 1)))
+             (pixels (crt.metal:texture-bytes target))
+             (corner (crt.metal:texture-pixel pixels target 1 1)))
         ;; The cells DO paint their own background, which for a default-bg cell
         ;; is whatever we passed -- so this asserts the plumbing, and the
         ;; double-application guard is that nothing ELSE adds a background.
@@ -149,9 +149,9 @@ profiles."
 (test cursor-is-drawn
   (when (gpu-or-skip)
     (with-text-renderer (renderer font :width 128 :height 64)
-      (let* ((target (text:render-text renderer (snapshot-of renderer "" :cursor 2)))
-             (pixels (metal:texture-bytes target))
-             (cw (ceiling (text:font-cell-width font))))
+      (let* ((target (crt.text:render-text renderer (snapshot-of renderer "" :cursor 2)))
+             (pixels (crt.metal:texture-bytes target))
+             (cw (ceiling (crt.text:font-cell-width font))))
         (is (any-ink-p pixels target (+ 1 (* 2 cw)) 2 (+ (* 3 cw) -1) 6)
             "the cursor block is not where it was asked for")))))
 
@@ -160,19 +160,19 @@ profiles."
     (if (null font)
         (skip "the bundled fonts are not present")
         (unwind-protect
-             (multiple-value-bind (cols rows) (text:text-grid-size font 800 600)
+             (multiple-value-bind (cols rows) (crt.text:text-grid-size font 800 600)
                (is (plusp cols))
                (is (plusp rows))
-               (is (<= (* cols (text:font-cell-width font)) 800)
+               (is (<= (* cols (crt.text:font-cell-width font)) 800)
                    "~D columns do not fit in 800 pixels" cols)
-               (is (<= (* rows (text:font-cell-height font)) 600)
+               (is (<= (* rows (crt.text:font-cell-height font)) 600)
                    "~D rows do not fit in 600 pixels" rows))
-          (text:release-font font)))))
+          (crt.text:release-font font)))))
 
 (defun row-ink (pixels texture width row)
   "How many lit pixels are in ROW of the first cell."
   (loop for x from 0 below width
-        count (> (first (metal:texture-pixel pixels texture x row)) 8)))
+        count (> (first (crt.metal:texture-pixel pixels texture x row)) 8)))
 
 (test glyphs-are-not-vertically-mirrored
   "Draw \"L\" and check its widest row is near the BOTTOM of its ink.
@@ -196,12 +196,12 @@ compared thirds and they came out exactly equal, passing a bug it was written to
 catch would have been luck either way."
   (when (gpu-or-skip)
     (with-text-renderer (renderer font :width 128 :height 64)
-      (let* ((target (text:render-text renderer (snapshot-of renderer "L")
+      (let* ((target (crt.text:render-text renderer (snapshot-of renderer "L")
                                        :default-fg '(255 255 255)
                                        :default-bg '(0 0 0)))
-             (pixels (metal:texture-bytes target))
-             (cw (ceiling (text:font-cell-width font)))
-             (ch (ceiling (text:font-cell-height font)))
+             (pixels (crt.metal:texture-bytes target))
+             (cw (ceiling (crt.text:font-cell-width font)))
+             (ch (ceiling (crt.text:font-cell-height font)))
              (ink (loop for y from 0 below ch
                         collect (cons y (row-ink pixels target cw y))))
              (lit (remove-if-not (lambda (pair) (plusp (cdr pair))) ink)))

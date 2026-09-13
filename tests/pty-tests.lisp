@@ -10,7 +10,7 @@
     (with-output-to-string (out)
       (cffi:with-foreign-object (buffer :uint8 4096)
         (loop
-          (let ((n (pty:pty-read pty buffer 4096)))
+          (let ((n (crt.pty:pty-read pty buffer 4096)))
             (cond ((plusp n)
                    (dotimes (i n)
                      (write-char (code-char (cffi:mem-aref buffer :uint8 i)) out)))
@@ -19,10 +19,10 @@
             (when (> (get-internal-real-time) deadline) (return))))))))
 
 (test spawn-and-read
-  (let ((pty (pty:spawn-pty '("/bin/echo" "hello from the child") 24 80)))
+  (let ((pty (crt.pty:spawn-pty '("/bin/echo" "hello from the child") 24 80)))
     (unwind-protect
          (is (search "hello from the child" (drain pty)))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))
 
 (test winsize-reaches-the-child
   "The test the whole shim exists for.
@@ -34,57 +34,57 @@ parent's resize is guaranteed to land before stty runs -- no sleep, no race.
 Measured against the same call made with a plain cffi:foreign-funcall: ioctl
 returns -1 and the child says \"0 0\".  ioctl is variadic, and on Apple arm64 a
 variadic argument goes on the stack rather than in a register."
-  (let ((pty (pty:spawn-pty '("/bin/sh" "-c" "read x; stty size") 24 80)))
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "read x; stty size") 24 80)))
     (unwind-protect
          (progn
-           (is-true (pty:set-winsize (pty:pty-fd pty) 30 100))
-           (pty:pty-write pty (babel:string-to-octets (format nil "~%")))
+           (is-true (crt.pty:set-winsize (crt.pty:pty-fd pty) 30 100))
+           (crt.pty:pty-write pty (babel:string-to-octets (format nil "~%")))
            (let ((text (drain pty)))
              (is (search "30 100" text)
                  "the child saw ~S, not 30 rows by 100 columns"
                  (string-trim '(#\Space #\Newline #\Return) text))))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))
 
 (test winsize-round-trips
-  (let ((pty (pty:spawn-pty '("/bin/sh" "-c" "read x") 24 80)))
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "read x") 24 80)))
     (unwind-protect
          (progn
-           (multiple-value-bind (rows cols) (pty:get-winsize (pty:pty-fd pty))
+           (multiple-value-bind (rows cols) (crt.pty:get-winsize (crt.pty:pty-fd pty))
              (is (= 24 rows) "forkpty's initial size should be what we asked for")
              (is (= 80 cols)))
-           (pty:set-winsize (pty:pty-fd pty) 40 120)
-           (multiple-value-bind (rows cols) (pty:get-winsize (pty:pty-fd pty))
+           (crt.pty:set-winsize (crt.pty:pty-fd pty) 40 120)
+           (multiple-value-bind (rows cols) (crt.pty:get-winsize (crt.pty:pty-fd pty))
              (is (= 40 rows))
              (is (= 120 cols))))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))
 
 (test child-exit-is-reaped
-  (let ((pty (pty:spawn-pty '("/bin/sh" "-c" "exit 7") 24 80)))
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "exit 7") 24 80)))
     (unwind-protect
          (progn
            (drain pty)
            ;; waitpid is non-blocking, and the child may not have been reaped
            ;; by the kernel the instant its output ended.
            (let ((status (loop repeat 100
-                               for s = (pty:pty-reap pty)
+                               for s = (crt.pty:pty-reap pty)
                                when s return s
                                do (sleep 0.02))))
              (is (eql 7 status) "exit status should be 7, got ~S" status)))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))
 
 (test environment-forces-term
   "TERM is a promise about what we implement, not something to inherit."
-  (let ((pty (pty:spawn-pty '("/bin/sh" "-c" "printf %s \"$TERM/$COLORTERM\"") 24 80)))
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "printf %s \"$TERM/$COLORTERM\"") 24 80)))
     (unwind-protect
          (let ((text (drain pty)))
            (is (search "xterm-256color/truecolor" text)
                "child saw ~S" (string-trim '(#\Space #\Newline #\Return) text)))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))
 
 (test environment-inherits-the-rest
   "Everything else comes from C's `environ' -- not SB-EXT:POSIX-ENVIRON, which
 does not exist on ECL, where half this program still has to load."
-  (let ((entries (pty:child-environment)))
+  (let ((entries (crt.pty:child-environment)))
     (is (find "TERM=xterm-256color" entries :test #'string=))
     (is (find-if (lambda (e) (eql 0 (search "PATH=" e))) entries)
         "PATH should have been inherited")
@@ -92,13 +92,13 @@ does not exist on ECL, where half this program still has to load."
         "TERM must appear exactly once, not twice")))
 
 (test default-shell-is-usable
-  (let ((shell (pty:default-shell)))
+  (let ((shell (crt.pty:default-shell)))
     (is (probe-file shell) "~S does not exist" shell)
-    (is (equal (list shell "-i" "-l") (pty:login-shell-arguments shell))
+    (is (equal (list shell "-i" "-l") (crt.pty:login-shell-arguments shell))
         "macOS needs a login shell, or $PATH is missing everything path_helper adds")))
 
 (test working-directory
-  (let ((pty (pty:spawn-pty '("/bin/sh" "-c" "pwd") 24 80 :directory #p"/tmp/")))
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "pwd") 24 80 :directory #p"/tmp/")))
     (unwind-protect
          (is (search "tmp" (drain pty)))
-      (pty:pty-close pty))))
+      (crt.pty:pty-close pty))))

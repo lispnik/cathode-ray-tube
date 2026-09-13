@@ -13,19 +13,22 @@
 ;;;; library.  See the header of utc-status-app-bundle.asd, where that bug was
 ;;;; found the hard way.
 
-(asdf:defsystem #:cathode-ray-tube
-  :description "A terminal emulator that looks like a cathode-ray tube."
+(asdf:defsystem #:cathode-ray-tube/portable
+  :description "The half of cathode-ray-tube that has no Objective-C in it."
   :long-description
-  "A port of cool-retro-term (Filippo Scognamiglio, GPL-3) to a native macOS
-Cocoa application written in Common Lisp: the GLSL effects translated to Metal
-Shading Language, the window and render graph driven through the objc bindings,
-and terminal emulation by a vendored libvterm."
+  "UTIL, SETTINGS, VT, PTY and TERMINAL: the arithmetic, the fourteen profiles,
+the terminal core and the pseudo-terminal.  No AppKit, no Metal, no CoreText,
+and no SBCL-isms -- so it loads and is tested on ECL, where none of those exist.
+
+This system is not a convenience.  It is how the layering is ENFORCED: the
+property that half this program can be reasoned about without a GPU is one
+nobody maintains by intending to, and the ECL leg of CI is what makes it true.
+The day someone reaches for SB-EXT:POSIX-ENVIRON in the pty layer, that leg goes
+red and the SBCL legs do not."
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
   :license "GPL-3.0-or-later"
   :version "0.1.0"
-  :homepage "https://github.com/lispnik/cathode-ray-tube"
-  :depends-on (#:objc #:cffi #:babel #:bordeaux-threads #:alexandria
-               #:float-features #:com.inuoe.jzon #:trivial-main-thread)
+  :depends-on (#:cffi #:babel #:bordeaux-threads #:alexandria #:com.inuoe.jzon)
   :serial t
   :components
   ((:module "src"
@@ -55,8 +58,27 @@ and terminal emulation by a vendored libvterm."
                    (:file "shell")))
      (:module "terminal"
       :serial t
-      :components ((:file "terminal")))
-     (:module "metal"
+      :components ((:file "terminal")))))))
+
+(asdf:defsystem #:cathode-ray-tube
+  :description "A terminal emulator that looks like a cathode-ray tube."
+  :long-description
+  "A port of cool-retro-term (Filippo Scognamiglio, GPL-3) to a native macOS
+Cocoa application written in Common Lisp: the GLSL effects translated to Metal
+Shading Language, the window and render graph driven through the objc bindings,
+and terminal emulation by a vendored libvterm."
+  :author "Matthew Kennedy <burnsidemk@gmail.com>"
+  :license "GPL-3.0-or-later"
+  :version "0.1.0"
+  :homepage "https://github.com/lispnik/cathode-ray-tube"
+  :depends-on (#:cathode-ray-tube/portable
+               #:objc #:cffi #:float-features #:trivial-main-thread)
+  :serial t
+  :components
+  ((:module "src"
+    :serial t
+    :components
+    ((:module "metal"
       :serial t
       :components ((:file "package")
                    (:file "constants")
@@ -85,9 +107,9 @@ and terminal emulation by a vendored libvterm."
                    (:file "session")))
      (:file "main")))))
 
-(asdf:defsystem #:cathode-ray-tube/tests
-  :description "The FiveAM suite."
-  :depends-on (#:cathode-ray-tube #:fiveam)
+(asdf:defsystem #:cathode-ray-tube/portable-tests
+  :description "The suites that need neither a GPU nor a window -- the ECL leg."
+  :depends-on (#:cathode-ray-tube/portable #:fiveam)
   :serial t
   :components
   ((:module "tests"
@@ -98,7 +120,16 @@ and terminal emulation by a vendored libvterm."
                  (:file "profile-tests")
                  (:file "vt-tests")
                  (:file "pty-tests")
-                 (:file "terminal-tests")
+                 (:file "terminal-tests")))))
+
+(asdf:defsystem #:cathode-ray-tube/tests
+  :description "Everything: the portable suites plus the GPU and window ones."
+  :depends-on (#:cathode-ray-tube #:cathode-ray-tube/portable-tests #:fiveam)
+  :serial t
+  :components
+  ((:module "tests"
+    :serial t
+    :components ((:file "gpu-package")
                  (:file "metal-tests")
                  (:file "text-tests")
                  (:file "effects-tests")

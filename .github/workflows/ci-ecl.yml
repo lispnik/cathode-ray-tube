@@ -1,0 +1,138 @@
+# ECL on macOS.
+#
+# A separate workflow rather than a leg of ci-macos.yml, and deliberately so:
+# that file's matrix varies the RUNNER, this varies the IMPLEMENTATION and needs
+# a Lisp built from source.  Folding it in would make the single badge mean
+# "both, mostly", and the point of that badge is that it means "both pass".
+#
+# WHAT THIS PROVES, HONESTLY.  ECL cannot build the .app -- asdf-macos-app is
+# SBCL-only -- and cannot reach the UI, Metal or CoreText at all.  It runs the
+# TIER 1 suite: the arithmetic, the fourteen profiles, the terminal core and the
+# pty.  That is roughly half the checks and none of the pixels.
+#
+# The payoff is ENFORCEMENT rather than coverage.  CRT.UTIL, CRT.SETTINGS,
+# CRT.VT, CRT.PTY and CRT.TERMINAL are supposed to be free of Objective-C and of
+# SBCL-isms, and that is a property nobody maintains by intending to.  This is
+# what makes it true: the day someone reaches for SB-EXT:POSIX-ENVIRON in the
+# pty layer, this goes red and the SBCL legs do not.
+#
+# A STOCK ECL CANNOT RUN THIS AT ALL, and the reason is not ours:
+#
+#     (si:find-foreign-symbol "strlen" :default :pointer-void 0)
+#     => Could not load foreign symbol "strlen" from module :DEFAULT
+#
+# Not objc_getClass -- strlen.  ecl_library_symbol calls dlsym(0, ...) for the
+# :default module, and on Darwin a null handle is not the global scope;
+# RTLD_DEFAULT is (void *)-2.  CFFI's ECL backend resolves foreign functions by
+# name, so on a stock build it resolves nothing.  Hence a build from
+# lispnik/ecl's develop, which carries that fix and three others.  Delete this
+# whole job the day they are upstream and `brew install ecl' carries them.
+
+name: ECL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ecl · macos-latest (arm64)
+    runs-on: macos-latest
+    env:
+      ECL_REPOSITORY: https://github.com/lispnik/ecl.git
+      ECL_BRANCH: develop
+    # Building ECL is the long pole at roughly six minutes cold; nothing after
+    # it takes more than five.
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The branch is named here; the COMMIT it stands for is resolved once per
+      # run and everything after reads that.  A branch name must never reach a
+      # cache key directly -- it would stop tracking what it names the moment the
+      # branch moved, and the cache would hand back a binary built from
+      # something else.
+      - name: Resolve the ECL branch to a commit
+        id: ecl
+        run: |
+          sha=$(git ls-remote "$ECL_REPOSITORY" "refs/heads/$ECL_BRANCH" | cut -f1)
+          test -n "$sha" || { echo "::error::$ECL_REPOSITORY has no branch $ECL_BRANCH" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$ECL_BRANCH is $sha"
+
+      - name: Cache the built ECL
+        id: ecl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/ecl
+          key: ecl-${{ runner.os }}-${{ runner.arch }}-${{ steps.ecl.outputs.sha }}
+
+      - name: Build ECL from source
+        if: steps.ecl-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          brew install gmp libffi automake autoconf libtool texinfo
+          git clone "$ECL_REPOSITORY" "$RUNNER_TEMP/ecl"
+          cd "$RUNNER_TEMP/ecl"
+          git checkout "${{ steps.ecl.outputs.sha }}"
+          ./configure --prefix="$HOME/.local/ecl" --enable-gmp=included
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Put ECL on the path
+        run: echo "$HOME/.local/ecl/bin" >> "$GITHUB_PATH"
+
+      - name: Build the vendored library
+        run: make -C vendor && make -C vendor check
+
+      # ocicl's installer is an SBCL program, but what it produces is a
+      # directory of source and ocicl-runtime.lisp is implementation-agnostic.
+      # So it is installed with SBCL and used from ECL.
+      - name: Install SBCL, for ocicl only
+        run: brew install sbcl
+
+      - name: Install and configure ocicl
+        run: |
+          git clone --depth 1 https://github.com/ocicl/ocicl.git "$HOME/ocicl-src"
+          ( cd "$HOME/ocicl-src" && sbcl --non-interactive --load setup.lisp )
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          ocicl setup
+          for attempt in 1 2 3 4 5; do
+            ocicl install 2>&1 | tee ocicl-install.log
+            grep -q "failed to install" ocicl-install.log || break
+            echo "::warning::ocicl install attempt $attempt did not get every package"
+            sleep 30
+          done
+          if grep -q "failed to install" ocicl-install.log; then
+            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+            exit 1
+          fi
+
+      - name: Report the environment
+        # The first line is the one that matters: if :default resolves nothing,
+        # every later failure is a consequence of that and not worth reading.
+        run: |
+          ecl --norc \
+            --eval '(require :asdf)' \
+            --eval '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:getcwd)) :ignore-inherited-configuration))' \
+            --eval '(format t "~&:default resolves strlen: ~A~%" (and (ignore-errors (si:find-foreign-symbol "strlen" :default :pointer-void 0)) t))' \
+            --eval '(format t "ECL ~A on ~A~%" (lisp-implementation-version) (machine-type))' \
+            --eval '(ext:quit)'
+
+      # Tier 1 only, and named as such: the portable half of the program.
+      # Loading :cathode-ray-tube would pull in objc and the UI, which is not
+      # what this leg is for.
+      - name: Run the portable suite
+        run: |
+          ecl --norc \
+            --eval '(require :asdf)' \
+            --eval '(asdf:initialize-source-registry (list :source-registry (list :tree (uiop:getcwd)) :ignore-inherited-configuration))' \
+            --eval '(asdf:load-system :cathode-ray-tube/portable-tests)' \
+            --eval '(ext:quit (if (cathode-ray-tube/tests:run-portable-tests) 0 1))'

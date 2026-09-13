@@ -37,19 +37,19 @@ pipeline that builds, a texture that allocates, and a black window."
                            (s (uiop:run-program (list (namestring script))
                                                 :output :string))
                          (read s))))
-            (is (equal (normalise fresh) (normalise metal:*metal-constants*))
+            (is (equal (normalise fresh) (normalise crt.metal:*metal-constants*))
                 "src/metal/constants.lisp disagrees with the SDK.~%~
                  Regenerate it with `make constants'.~%~
                  SDK says: ~S~%file says: ~S"
-                (normalise fresh) (normalise metal:*metal-constants*)))))))
+                (normalise fresh) (normalise crt.metal:*metal-constants*)))))))
 
 (test device-and-library
   (when (gpu-or-skip)
-    (is (stringp (metal:device-name)))
-    (is (not (metal:null-object-p (metal:command-queue))))
+    (is (stringp (crt.metal:device-name)))
+    (is (not (crt.metal:null-object-p (crt.metal:command-queue))))
     ;; Compiling res/shaders/crt.metal is a real check: a syntax error in the
     ;; shader is otherwise only discovered by opening a window.
-    (finishes (metal:default-library :reload t))))
+    (finishes (crt.metal:default-library :reload t))))
 
 (test offscreen-render-and-readback
   "Draw the gradient into a texture and check individual pixels.
@@ -59,22 +59,22 @@ texture origin is top-left, so row 0 of the readback is uv.y = 1.  Hence 'top'
 here is the high-green end."
   (when (gpu-or-skip)
     (let* ((width 64) (height 32)
-           (target (metal:make-texture :width width :height height
+           (target (crt.metal:make-texture :width width :height height
                                        :label "test-target"))
-           (pipeline (metal:pipeline :fragment "gradient_fragment"
+           (pipeline (crt.metal:pipeline :fragment "gradient_fragment"
                                      :constants (list 3 t) ; CRT_CHROMA
                                      :label "test-gradient")))
       (cffi:with-foreign-object (uniforms :float 2)
         (setf (cffi:mem-aref uniforms :float 0) 0.0   ; time
               (cffi:mem-aref uniforms :float 1) 2.0)  ; aspect
-        (metal:with-render-pass (encoder target :clear '(0d0 0d0 0d0 1d0))
-          (metal:use-pipeline encoder pipeline)
-          (metal:bind-fragment-bytes encoder uniforms 8 0)
-          (metal:draw-quad encoder)))
-      (let* ((pixels (metal:texture-bytes target))
-             (top-left (metal:texture-pixel pixels target 1 1))
-             (top-right (metal:texture-pixel pixels target (- width 2) 1))
-             (bottom-left (metal:texture-pixel pixels target 1 (- height 2))))
+        (crt.metal:with-render-pass (encoder target :clear '(0d0 0d0 0d0 1d0))
+          (crt.metal:use-pipeline encoder pipeline)
+          (crt.metal:bind-fragment-bytes encoder uniforms 8 0)
+          (crt.metal:draw-quad encoder)))
+      (let* ((pixels (crt.metal:texture-bytes target))
+             (top-left (crt.metal:texture-pixel pixels target 1 1))
+             (top-right (crt.metal:texture-pixel pixels target (- width 2) 1))
+             (bottom-left (crt.metal:texture-pixel pixels target 1 (- height 2))))
         (is (= (* width height 4) (length pixels)))
         (is (near (first top-left) 0 8)
             "red tracks uv.x: left edge should be ~0, got ~S" top-left)
@@ -84,7 +84,7 @@ here is the high-green end."
             "green tracks uv.y: row 0 is uv.y=1, so it should exceed the last row~%~
              top ~S bottom ~S" top-left bottom-left)
         (is (= 255 (fourth top-left)) "alpha is opaque"))
-      (metal:release-texture target))))
+      (crt.metal:release-texture target))))
 
 (test function-constants-really-specialise
   "Same source, constant unset, must be flat blue.
@@ -94,22 +94,22 @@ upstream ships would be replaced by one shader that branches at run time, which
 is slower and -- much worse -- would mean the constants are not doing what the
 rest of the graph assumes."
   (when (gpu-or-skip)
-    (let* ((target (metal:make-texture :width 16 :height 16))
-           (pipeline (metal:pipeline :fragment "gradient_fragment"
+    (let* ((target (crt.metal:make-texture :width 16 :height 16))
+           (pipeline (crt.metal:pipeline :fragment "gradient_fragment"
                                      :constants (list 3 nil)
                                      :label "test-unspecialised")))
       (cffi:with-foreign-object (uniforms :float 2)
         (setf (cffi:mem-aref uniforms :float 0) 0.0
               (cffi:mem-aref uniforms :float 1) 1.0)
-        (metal:with-render-pass (encoder target)
-          (metal:use-pipeline encoder pipeline)
-          (metal:bind-fragment-bytes encoder uniforms 8 0)
-          (metal:draw-quad encoder)))
-      (let ((centre (metal:texture-pixel (metal:texture-bytes target) target 8 8)))
+        (crt.metal:with-render-pass (encoder target)
+          (crt.metal:use-pipeline encoder pipeline)
+          (crt.metal:bind-fragment-bytes encoder uniforms 8 0)
+          (crt.metal:draw-quad encoder)))
+      (let ((centre (crt.metal:texture-pixel (crt.metal:texture-bytes target) target 8 8)))
         (is (and (near (first centre) 0) (near (second centre) 0)
                  (near (third centre) 255))
             "expected flat blue, got ~S" centre))
-      (metal:release-texture target))))
+      (crt.metal:release-texture target))))
 
 (test clear-color-crosses-by-value
   "MTLClearColor is four doubles -- a 32-byte homogeneous float aggregate the
@@ -117,22 +117,22 @@ ABI passes in v0-v3 -- and still cannot use the #(...) shorthand, because the
 runtime reports it as an ANONYMOUS structure and the bridge converts only the
 four Cocoa ones by name.  This asserts the buffer path works."
   (when (gpu-or-skip)
-    (let ((target (metal:make-texture :width 8 :height 8)))
+    (let ((target (crt.metal:make-texture :width 8 :height 8)))
       ;; A pass that only clears: no pipeline, no draw.  The clear colour IS
       ;; the thing under test.
-      (metal:with-render-pass (encoder target :clear '(0.25d0 0.5d0 0.75d0 1d0)))
-      (let ((p (metal:texture-pixel (metal:texture-bytes target) target 4 4)))
+      (crt.metal:with-render-pass (encoder target :clear '(0.25d0 0.5d0 0.75d0 1d0)))
+      (let ((p (crt.metal:texture-pixel (crt.metal:texture-bytes target) target 4 4)))
         (is (and (near (first p) 64) (near (second p) 128)
                  (near (third p) 191) (= 255 (fourth p)))
             "cleared to ~S, wanted (64 128 191 255)" p))
-      (metal:release-texture target))))
+      (crt.metal:release-texture target))))
 
 (test pipelines-are-memoised
   "A profile switch pays one compile; a frame pays none."
   (when (gpu-or-skip)
-    (metal:clear-pipeline-cache)
-    (let ((a (metal:pipeline :fragment "gradient_fragment" :constants (list 3 t)))
-          (b (metal:pipeline :fragment "gradient_fragment" :constants (list 3 t)))
-          (c (metal:pipeline :fragment "gradient_fragment" :constants (list 3 nil))))
+    (crt.metal:clear-pipeline-cache)
+    (let ((a (crt.metal:pipeline :fragment "gradient_fragment" :constants (list 3 t)))
+          (b (crt.metal:pipeline :fragment "gradient_fragment" :constants (list 3 t)))
+          (c (crt.metal:pipeline :fragment "gradient_fragment" :constants (list 3 nil))))
       (is (eq a b) "the same key must return the same pipeline object")
       (is (not (eq a c)) "a different constant must build a different pipeline"))))
