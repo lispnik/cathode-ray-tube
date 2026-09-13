@@ -328,7 +328,14 @@ would be porting the workaround instead of the feature."
                readout))))))
 
 (defun advanced-rows (window)
-  "SettingsAdvancedTab.qml: the four global quality knobs and the shell."
+  "SettingsAdvancedTab.qml: the four global quality knobs and the shell.
+
+One checkbox of upstream's is missing and is meant to be: `Show Menubar'.  Qt
+draws its own menu bar inside the window, so hiding it is a real choice there.
+On macOS the menu bar belongs to the system and to the frontmost application,
+and an application that could hide it would be doing something other than what
+that checkbox means.  Full Screen is the control that actually corresponds, and
+it is already in the View menu where this platform puts it."
   (let ((session (settings-window-session window))
         (settings crt.settings:*settings*))
     (flet ((quality (label reader writer)
