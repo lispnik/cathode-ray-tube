@@ -129,19 +129,70 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
 (defparameter *default-profile* "Default Amber"
   "The profile a new window opens with -- cool-retro-term's own default.")
 
-(defun make-session (&key (width 1024) (height 640) command
+(defparameter *default-columns* 80)
+(defparameter *default-rows* 25
+  "The grid a new window opens at.
+
+80x25 rather than 80x24: 25 is what an IBM VGA text mode actually was, and this
+program's default face is PxPlus_IBM_VGA_8x16.  A window is still free to be any
+size -- the grid follows it after the first resize -- but it OPENS at the size
+the thing it is imitating had.")
+
+(defun screen-backing-scale ()
+  "The main screen's backing scale, needed BEFORE there is a window to ask.
+
+2 on a Retina display.  It decides the magnification, and therefore the window
+size, so it has to be known before the window exists."
+  (let ((screen (objc:invoke "NSScreen" "mainScreen")))
+    (if (crt.metal:null-object-p screen)
+        1
+        (max 1 (round (objc:invoke-into 'double-float screen "backingScaleFactor"))))))
+
+(defun font-scale-for (font-name)
+  "How far to magnify FONT-NAME's glyphs.
+
+The backing scale for a low-resolution face, so its native pixels come out
+square and one glyph pixel covers one device pixel per step; 1 for the modern
+faces, which are outlines and are rasterised at the size they are drawn."
+  (if (crt.text::bundled-font-low-resolution-p font-name)
+      (screen-backing-scale)
+      1))
+
+(defun make-session (&key width height (columns *default-columns*)
+                          (rows *default-rows*) command
                           (font *default-font*) (title "cathode-ray-tube")
                           (profile *default-profile*) (effects t))
-  "A window running a shell.  Main thread only."
+  "A window running a shell.  Main thread only.
+
+Sized from COLUMNS by ROWS unless WIDTH and HEIGHT say otherwise -- the opposite
+of the way the grid is computed afterwards, and deliberately so: a terminal
+should OPEN at a familiar number of characters and only then start following
+whatever size the window is dragged to."
   (ensure-appkit)
   (let* ((loaded (crt.text::load-bundled-font font))
-         (window (make-crt-window :width width :height height :title title
-                                  :draw-function #'draw-session))
-         (view (crt-window-view window)))
+         (scale (font-scale-for font)))
     (unless loaded
       (error "Could not load the bundled font ~S." font))
+    ;; Device pixels for the grid, then points for the window: AppKit sizes
+    ;; windows in points and the glyphs are in device pixels, and conflating the
+    ;; two gives a window half the size it should be on a Retina display.
+    (unless (and width height)
+      (multiple-value-bind (pixel-width pixel-height)
+          (crt.text:grid-pixel-size loaded columns rows :scale scale)
+        (let ((backing (screen-backing-scale)))
+          (setf width (ceiling pixel-width backing)
+                height (ceiling pixel-height backing)))))
+    (make-session-in-window loaded scale width height title command profile
+                            effects)))
+
+(defun make-session-in-window (loaded scale width height title command profile
+                               effects)
+  (let* ((window (make-crt-window :width width :height height :title title
+                                  :draw-function #'draw-session))
+         (view (crt-window-view window)))
     (destructuring-bind (dw dh) (view-drawable-size view)
-      (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh))
+      (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh
+                                                    :scale scale))
              (chosen (or (crt.settings:find-profile profile)
                          (error "No profile named ~S." profile)))
              (session (%make-session :window window :view view
@@ -151,22 +202,25 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
           (setf (session-graph session)
                 (crt.effects:make-graph :profile chosen :width dw :height dh)))
         (multiple-value-bind (cols rows)
-            (crt.text:text-grid-size loaded dw dh)
+            (crt.text:text-grid-size loaded dw dh :scale scale)
           (setf (session-terminal session)
                 (crt.terminal:make-terminal
                  :rows rows :cols cols :command command
+                 ;; The reader thread is not the main thread, and closing a
+                 ;; window from anywhere else is a crash waiting for a quiet
+                 ;; afternoon.
                  :on-exit (lambda (terminal status)
                             (declare (ignore terminal status))
-                            ;; The reader thread is not the main thread, and
-                            ;; closing a window from anywhere else is a crash
-                            ;; waiting for a quiet afternoon.
-                            (on-main-thread (lambda () (end-session session))))
-                 :on-title (lambda (terminal title)
-                             (declare (ignore terminal))
-                             (on-main-thread
-                              (lambda ()
-                                (objc:invoke (crt-window-handle window)
-                                             "setTitle:" title)))))))
+                            (on-main-thread (lambda () (end-session session)))))))
+        ;; WITHOUT THIS THE TERMINAL IS READ-ONLY.  -keyDown: reaches the view,
+        ;; the view looks for a handler, finds NIL, and drops the keystroke --
+        ;; silently, because a view with nothing to do about a key is not an
+        ;; error.  Nothing else in the program refers to VIEW-KEY-HANDLER, so
+        ;; nothing else notices it was never set.
+        (setf (view-key-handler view)
+              (lambda (string)
+                (crt.terminal:terminal-send-string (session-terminal session)
+                                                   string)))
         (push session *sessions*)
         (show-crt-window window)
         session))))
@@ -189,11 +243,18 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
     (when window
       (close-crt-window window)
       (objc:invoke (crt-window-handle window) "close")))
-  ;; With no windows left, quit -- which is what
-  ;; -applicationShouldTerminateAfterLastWindowClosed: would do under [NSApp run]
-  ;; and does not do when the last window is closed programmatically.
-  (when (null *sessions*)
-    (objc:invoke (objc.runloop:shared-application) "terminate:" nil)))
+  ;; It does NOT call -terminate:, and this is the second time that lesson has
+  ;; been learned in this program -- CLOSE-CRT-WINDOW had the same line and the
+  ;; same comment justifying it.
+  ;;
+  ;; Closing the last window is AppKit's cue, answered by
+  ;; -applicationShouldTerminateAfterLastWindowClosed:, and AppKit only asks
+  ;; while it is running its own event loop.  Calling -terminate: here instead
+  ;; exits the process the instant the last session ends: indistinguishable from
+  ;; correct in the application, and catastrophic under test, where the suite's
+  ;; own teardown ended the run mid-suite with status 0.  A green exit code and
+  ;; no summary, twice.
+  (values))
 
 (defun set-session-profile (session name)
   "Switch profiles.  The pipelines for the new specialisation compile once."
@@ -204,7 +265,8 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
       (crt.effects::set-graph-profile (session-graph session) profile))
     profile))
 
-(defun run-terminal (&key (width 1024) (height 640) command
+(defun run-terminal (&key width height (columns *default-columns*)
+                          (rows *default-rows*) command
                           (profile *default-profile*) (effects t))
   "Open a terminal window and run the application.  Blocks."
   (ensure-appkit)
@@ -213,6 +275,6 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
     (setf *delegate* (make-instance 'application-delegate))
     (objc:invoke app "setDelegate:" (objc:objc-object-pointer *delegate*))
     (make-menu-bar)
-    (make-session :width width :height height :command command
-                  :profile profile :effects effects)
+    (make-session :width width :height height :columns columns :rows rows
+                  :command command :profile profile :effects effects)
     (objc.runloop:run-cocoa-application)))

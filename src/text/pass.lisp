@@ -22,8 +22,23 @@ the structure's 16-byte alignment is satisfied without padding.")
   sampler
   (cols 0 :type fixnum)
   (rows 0 :type fixnum)
+  ;; The on-screen cell, in device pixels: the font's own cell times SCALE.
   (cell-width 0.0 :type single-float)
   (cell-height 0.0 :type single-float)
+  ;; INTEGER magnification, and integer is the whole point.
+  ;;
+  ;; The sixteen low-resolution faces are bitmap designs rasterised at their
+  ;; NATIVE pixel size -- PxPlus_IBM_VGA_8x16 is drawn for an 8x16 cell and
+  ;; nothing else.  Asking CoreText for one at 32 pixels gets you a blurry
+  ;; interpolation of a bitmap, which is the one thing these fonts must never
+  ;; look like.  So they are rasterised small and magnified by a WHOLE number
+  ;; with a nearest-neighbour sampler, which keeps every pixel square.
+  ;;
+  ;; It is also what makes the program legible on a Retina display at all: the
+  ;; glyphs are in device pixels, so without magnification an 8x16 cell is 4x8
+  ;; POINTS and the terminal comes out half-size.  This is cool-retro-term's
+  ;; `scaleTexture', arrived at from the same direction.
+  (scale 1 :type (integer 1 16))
   (margin 0.0 :type single-float)
   ;; The instance buffer: an MTLBuffer in SHARED storage, written in place.
   ;; Two instances per cell is the worst case -- a background and a glyph --
@@ -38,21 +53,30 @@ the structure's 16-byte alignment is satisfied without padding.")
   ;; Rows, reused between frames, so a steady terminal allocates nothing.
   (scratch nil))
 
-(defun text-grid-size (font width height &key (margin 0.0))
-  "How many columns and rows of FONT fit in WIDTH by HEIGHT pixels."
-  (let ((cw (max 1d0 (font-cell-width font)))
-        (ch (max 1d0 (font-cell-height font))))
+(defun text-grid-size (font width height &key (margin 0.0) (scale 1))
+  "How many columns and rows of FONT fit in WIDTH by HEIGHT device pixels."
+  (let ((cw (* scale (max 1d0 (font-cell-width font))))
+        (ch (* scale (max 1d0 (font-cell-height font)))))
     (values (max 1 (floor (- width (* 2 margin)) cw))
             (max 1 (floor (- height (* 2 margin)) ch)))))
 
-(defun make-text-renderer (&key font width height (margin 0.0))
+(defun grid-pixel-size (font cols rows &key (margin 0.0) (scale 1))
+  "The device pixels COLS by ROWS of FONT need.  The inverse of TEXT-GRID-SIZE.
+
+For sizing a window to a grid rather than fitting a grid to a window, which is
+what a terminal defaulting to 80x25 wants."
+  (values (+ (* cols scale (max 1d0 (font-cell-width font))) (* 2 margin))
+          (+ (* rows scale (max 1d0 (font-cell-height font))) (* 2 margin))))
+
+(defun make-text-renderer (&key font width height (margin 0.0) (scale 1))
   (let* ((atlas (make-atlas))
          (renderer (%make-text-renderer
                     :font font
                     :atlas atlas
                     :margin (float margin 1.0)
-                    :cell-width (float (font-cell-width font) 1.0)
-                    :cell-height (float (font-cell-height font) 1.0)
+                    :scale (max 1 (round scale))
+                    :cell-width (float (* scale (font-cell-width font)) 1.0)
+                    :cell-height (float (* scale (font-cell-height font)) 1.0)
                     ;; Nearest, because the low-resolution faces are the point:
                     ;; their pixels are magnified by a whole number and must stay
                     ;; square.  Linear would turn Commodore PET into a smudge.
@@ -79,7 +103,8 @@ the structure's 16-byte alignment is satisfied without padding.")
   "Fit the grid to WIDTH by HEIGHT device pixels and remake the target."
   (multiple-value-bind (cols rows)
       (text-grid-size (text-renderer-font renderer) width height
-                      :margin (text-renderer-margin renderer))
+                      :margin (text-renderer-margin renderer)
+                      :scale (text-renderer-scale renderer))
     (setf (text-renderer-cols renderer) cols
           (text-renderer-rows renderer) rows)
     (when (text-renderer-target renderer)
@@ -146,8 +171,13 @@ second pass."
          (solid (atlas-solid atlas))
          (cw (text-renderer-cell-width renderer))
          (ch (text-renderer-cell-height renderer))
+         (scale (float (text-renderer-scale renderer) 1.0))
          (margin (text-renderer-margin renderer))
-         (ascent (float (font-ascent font) 1.0))
+         ;; CW and CH are already scaled; the GLYPH metrics are not -- they come
+         ;; from CoreText in the font's own pixels -- so every one of them is
+         ;; multiplied here.  Missing one puts the glyphs in the right cells at
+         ;; the wrong size, which looks like a font problem.
+         (ascent (* scale (float (font-ascent font) 1.0)))
          (rows (min (text-renderer-rows renderer) (term:snapshot-rows snapshot)))
          (cols (min (text-renderer-cols renderer) (term:snapshot-cols snapshot)))
          (cells (term:snapshot-cells snapshot))
@@ -186,9 +216,10 @@ second pass."
                   (multiple-value-bind (fr fg fb) (cell-colors cell default-fg default-bg)
                     (write-instance
                      buffer n fr fg fb 1.0
-                     (+ margin (* col cw) (glyph-bearing-x glyph))
-                     (+ margin (* row ch) ascent (- (glyph-bearing-y glyph)))
-                     (glyph-width glyph) (glyph-height glyph)
+                     (+ margin (* col cw) (* scale (glyph-bearing-x glyph)))
+                     (+ margin (* row ch) ascent
+                        (- (* scale (glyph-bearing-y glyph))))
+                     (* scale (glyph-width glyph)) (* scale (glyph-height glyph))
                      (glyph-u0 glyph) (glyph-v0 glyph)
                      (glyph-u1 glyph) (glyph-v1 glyph))
                     (incf n)))))))))

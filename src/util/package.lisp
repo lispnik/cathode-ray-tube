@@ -171,7 +171,10 @@
    ;; the pass
    #:text-renderer #:make-text-renderer #:release-text-renderer
    #:text-renderer-atlas #:text-renderer-font #:text-renderer-target
-   #:render-text #:text-grid-size #:resize-text-renderer))
+   #:render-text #:text-grid-size #:grid-pixel-size #:resize-text-renderer
+   #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
+   #:text-renderer-cell-width #:text-renderer-cell-height
+   #:bundled-font-low-resolution-p #:load-bundled-font))
 
 (defpackage #:cathode-ray-tube.effects
   (:use #:cl)
@@ -204,6 +207,7 @@
    #:session #:session-p #:make-session #:end-session #:run-terminal
    #:session-window #:session-view #:session-terminal #:session-renderer
    #:*sessions* #:*default-font* #:*default-profile*
+   #:*default-columns* #:*default-rows* #:screen-backing-scale
    #:session-profile #:session-graph #:set-session-profile))
 
 (defpackage #:cathode-ray-tube

@@ -11,8 +11,8 @@ application replaced by Cocoa driven from Lisp through the
 [`objc`](https://github.com/lispnik/objc) bindings, and the terminal emulation
 supplied by a vendored [libvterm](https://www.leonerd.org.uk/code/libvterm/).
 
-**Status: it looks like a cathode-ray tube.** `make run` opens a window, runs
-your shell, and draws it through the full effect chain — phosphor burn-in,
+**Status: it looks like a cathode-ray tube.** `make run` opens an 80×25 window,
+runs your shell, and draws it through the full effect chain — phosphor burn-in,
 bloom, scanlines, barrel distortion, chroma tint, jitter, horizontal-sync
 tearing and a procedural bezel — under any of the fourteen ported profiles.
 

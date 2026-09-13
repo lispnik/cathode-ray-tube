@@ -216,3 +216,82 @@ catch would have been luck either way."
                  widest is ~D, which is in the TOP half -- the glyph is ~
                  vertically mirrored.~%rows: ~S"
                 first-row last-row widest lit)))))))
+
+(test grid-size-and-pixel-size-are-inverses
+  "TEXT-GRID-SIZE fits a grid to a window; GRID-PIXEL-SIZE sizes a window to a
+grid.  A terminal needs both -- it OPENS at 80x25 and then follows whatever size
+it is dragged to -- and they have to agree, or the window it opens at is not the
+grid it asked for."
+  (let ((font (test-font)))
+    (if (null font)
+        (skip "the bundled fonts are not present")
+        (unwind-protect
+             (dolist (scale '(1 2 3))
+               (multiple-value-bind (pw ph)
+                   (crt.text:grid-pixel-size font 80 25 :scale scale)
+                 (multiple-value-bind (cols rows)
+                     (crt.text:text-grid-size font pw ph :scale scale)
+                   (is (= 80 cols) "scale ~D: ~D columns in ~,0F pixels" scale cols pw)
+                   (is (= 25 rows) "scale ~D: ~D rows in ~,0F pixels" scale rows ph))))
+          (crt.text:release-font font)))))
+
+(test magnification-is-an-integer-multiple
+  "The low-resolution faces are bitmap designs drawn for one pixel size.
+
+Magnifying by a WHOLE number with a nearest-neighbour sampler keeps their pixels
+square; asking CoreText for one at a larger size, or scaling by a fraction, gets
+a blurry interpolation of a bitmap, which is the one thing these fonts must
+never look like."
+  (when (gpu-or-skip)
+    (let ((font (test-font)))
+      (if (null font)
+          (skip "the bundled fonts are not present")
+          (let ((one (crt.text:make-text-renderer :font font :width 256 :height 128
+                                                  :scale 1))
+                (two (crt.text:make-text-renderer :font font :width 256 :height 128
+                                                  :scale 2)))
+            (unwind-protect
+                 (progn
+                   (is (= (* 2 (crt.text:text-renderer-cell-width one))
+                          (crt.text:text-renderer-cell-width two))
+                       "doubling the scale must double the on-screen cell")
+                   ;; And therefore halve the grid in the same window.
+                   (is (= (crt.text:text-renderer-cols one)
+                          (* 2 (crt.text:text-renderer-cols two)))
+                       "~D columns at 1x but ~D at 2x"
+                       (crt.text:text-renderer-cols one)
+                       (crt.text:text-renderer-cols two)))
+              (crt.text:release-text-renderer one)
+              (crt.text:release-text-renderer two)
+              (crt.text:release-font font)))))))
+
+(test magnified-glyphs-stay-inside-their-cells
+  "Draw \"M\" at 2x and check it has not overflowed into the next cell.
+
+The glyph metrics come from CoreText in the FONT's pixels while the cell is in
+scaled pixels, so every one of bearing, width, height and ascent has to be
+multiplied.  Missing one puts the glyphs in the right cells at the wrong size --
+which looks like a font problem rather than an arithmetic one."
+  (when (gpu-or-skip)
+    (let ((font (test-font)))
+      (if (null font)
+          (skip "the bundled fonts are not present")
+          (let ((renderer (crt.text:make-text-renderer :font font :width 256
+                                                       :height 128 :scale 2)))
+            (unwind-protect
+                 (let* ((target (crt.text:render-text renderer
+                                                      (snapshot-of renderer "M")
+                                                      :default-fg '(255 255 255)
+                                                      :default-bg '(0 0 0)))
+                        (pixels (crt.metal:texture-bytes target))
+                        (cw (ceiling (crt.text:text-renderer-cell-width renderer)))
+                        (ch (ceiling (crt.text:text-renderer-cell-height renderer))))
+                   (is (any-ink-p pixels target 0 0 cw ch)
+                       "no ink in the first cell at 2x")
+                   (is (not (any-ink-p pixels target (+ cw 2) 0 (* 2 cw) ch))
+                       "ink spilled into the second cell -- a glyph metric was ~
+                        not scaled")
+                   (is (not (any-ink-p pixels target 0 (+ ch 2) cw (* 2 ch)))
+                       "ink spilled onto the second row"))
+              (crt.text:release-text-renderer renderer)
+              (crt.text:release-font font)))))))

@@ -11,6 +11,20 @@
 (in-package #:cathode-ray-tube/tests)
 (in-suite ui)
 
+(defun wait-for (predicate &key (timeout 5.0) (interval 0.02))
+  "Pump the event loop until PREDICATE answers, or time runs out.
+
+PUMPING rather than sleeping: the reader thread delivers on its own, but the
+session only notices during a frame, and frames only happen while the run loop
+runs."
+  (let ((deadline (+ (get-internal-real-time)
+                     (* timeout internal-time-units-per-second))))
+    (loop
+      (let ((value (funcall predicate)))
+        (when value (return value)))
+      (when (> (get-internal-real-time) deadline) (return nil))
+      (objc.runloop:pump-events :seconds interval :max-seconds interval))))
+
 (defun window-server-or-skip ()
   (cond ((not (objc.runloop:window-server-p))
          (skip "no window server") nil)
@@ -53,3 +67,102 @@ failure this guards against is zero."
                    (crt.ui:view-effect-time view))))
         (crt.ui:close-crt-window window)
         (objc:invoke (crt.ui:crt-window-handle window) "orderOut:" nil)))))
+
+(defun synthesize-key (window view characters &optional (code 0))
+  "Send VIEW a real NSKeyDown, the way AppKit would."
+  (let ((event (objc:invoke
+                "NSEvent"
+                (concatenate 'string
+                             "keyEventWithType:location:modifierFlags:timestamp:"
+                             "windowNumber:context:characters:"
+                             "charactersIgnoringModifiers:isARepeat:keyCode:")
+                10                       ; NSEventTypeKeyDown
+                (vector 0d0 0d0)
+                0                        ; no modifiers
+                0d0
+                (objc:invoke-into 'integer window "windowNumber")
+                (cffi:null-pointer)
+                characters characters nil code)))
+    (objc:invoke (objc:objc-object-pointer view) "keyDown:"
+                 (objc:objc-object-pointer event))))
+
+(test typing-reaches-the-child
+  "The regression test for a terminal that could not be typed into.
+
+VIEW-KEY-HANDLER was never assigned, so -keyDown: reached the view, found no
+handler, and dropped the keystroke -- silently, because a view with nothing to
+do about a key is not an error, and nothing else in the program refers to that
+slot.  The window drew, the shell ran, the prompt blinked, and it was read-only.
+
+Asserting on the CHILD rather than on the handler is the point: this passes only
+if a synthesized NSEvent travels the whole way -- keyDown:, the key table, the
+outbound queue, the reader thread's write, the pty, the shell, back through
+libvterm and onto the screen."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let* ((session (crt.ui:make-session
+                     :width 640 :height 400
+                     :title "cathode-ray-tube input test"
+                     :command '("/bin/sh" "-c"
+                                "read line; printf 'GOT[%s]' \"$line\"; sleep 10")))
+           (window (crt.ui:crt-window-handle (crt.ui:session-window session)))
+           (view (crt.ui:session-view session))
+           (terminal (crt.ui:session-terminal session)))
+      (unwind-protect
+           (progn
+             (is-true (crt.ui:view-key-handler view)
+                      "the session must install a key handler")
+             (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 1.0d0)
+             (synthesize-key window view "h" 4)
+             (synthesize-key window view "i" 34)
+             (synthesize-key window view (string #\Newline) 36)
+             (let ((seen (wait-for (lambda ()
+                                     (let ((text (crt.terminal:with-terminal-locked
+                                                     (terminal)
+                                                   (crt.vt:vt-text
+                                                    (crt.terminal:terminal-vt terminal)
+                                                    0 3))))
+                                       (and (search "GOT[hi]" text) text))))))
+               (is-true seen
+                        "the child never saw the keystrokes; screen was ~S"
+                        (crt.terminal:with-terminal-locked (terminal)
+                          (crt.vt:vt-text (crt.terminal:terminal-vt terminal) 0 3)))))
+        (crt.ui:end-session session)))))
+
+(test special-keys-become-escape-sequences
+  "Arrows and friends arrive as private-use codepoints in the 0xF700 block,
+which is AppKit's way of not inventing an event type for them."
+  (is (string= (format nil "~C[A" #\Escape)
+               (crt.ui::function-key-sequence :up)))
+  (is (string= (format nil "~C[D" #\Escape)
+               (crt.ui::function-key-sequence :left)))
+  (is (string= (format nil "~C[3~~" #\Escape)
+               (crt.ui::function-key-sequence :delete)))
+  (is (string= (format nil "~COP" #\Escape)
+               (crt.ui::function-key-sequence :f1)))
+  (is (null (crt.ui::function-key-sequence :not-a-key))))
+
+(test a-new-window-opens-at-eighty-by-twenty-five
+  "And the CHILD agrees, which is the half that matters.
+
+A terminal that thinks it is 80x25 while the shell thinks otherwise is worse
+than one that is simply the wrong size: line wrapping, curses redraws and
+`clear' all go wrong in ways that look like the program's fault."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let ((session (crt.ui:make-session
+                    :title "cathode-ray-tube geometry test"
+                    :command '("/bin/sh" "-c" "sleep 10"))))
+      (unwind-protect
+           (let ((terminal (crt.ui:session-terminal session)))
+             (is (= 80 (crt.terminal:terminal-cols terminal)))
+             (is (= 25 (crt.terminal:terminal-rows terminal)))
+             ;; The kernel's idea of the pty, which is what the child reads.
+             (multiple-value-bind (rows cols)
+                 (crt.pty:get-winsize
+                  (crt.pty:pty-fd (crt.terminal:terminal-pty terminal)))
+               (is (= 25 rows) "the kernel thinks the pty has ~D rows" rows)
+               (is (= 80 cols) "the kernel thinks the pty has ~D columns" cols)))
+        (crt.ui:end-session session)))))
