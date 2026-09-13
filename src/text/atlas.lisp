@@ -223,18 +223,39 @@ had nothing else to offer, and it is what qmltermwidget does too."
                       (setf (aref pixels (+ destination target))
                             (cffi:mem-aref bitmap :uint8 (+ source col))))))))))))))
 
-(defun atlas-glyph (atlas font character &key bold italic)
+(defun font-for-character (font character fallbacks)
+  "The first face in FONT then FALLBACKS that has a glyph for CHARACTER.
+
+FONT itself when nothing does, so the caller always has a face to measure the
+cell with -- and gets the blank RASTERISE-GLYPH draws for an unmapped character,
+which is the right thing to show and not an error."
+  (if (plusp (glyph-for-character font character))
+      font
+      (or (find-if (lambda (candidate)
+                     (plusp (glyph-for-character candidate character)))
+                   fallbacks)
+          font)))
+
+(defun atlas-glyph (atlas font character &key bold italic fallbacks)
   "CHARACTER's glyph, rasterising it on first sight.
 
 Keyed on the font's handle AND the style as well as the character: two faces, or
 the same face at two sizes, are different fonts, and a bold A is a different
-picture from a plain one."
-  (let ((key (list (cffi:pointer-address (font-handle font))
-                   (char-code character)
-                   (and bold t) (and italic t))))
+picture from a plain one.  Keyed on the face that ACTUALLY draws it, so a glyph
+borrowed from a fallback is cached under the fallback and shared by every face
+that borrows it.
+
+FALLBACKS is the substitution chain -- see CRT.TEXT:FONT-FALLBACK-CHAIN.  These
+faces are 8x16 bitmap designs from machines with 128 characters and a terminal is
+shown whatever bytes arrive, so `no glyph' is the ordinary case rather than the
+exceptional one."
+  (let* ((face (if fallbacks (font-for-character font character fallbacks) font))
+         (key (list (cffi:pointer-address (font-handle face))
+                    (char-code character)
+                    (and bold t) (and italic t))))
     (or (gethash key (atlas-glyphs atlas))
         (setf (gethash key (atlas-glyphs atlas))
-              (rasterise-glyph atlas font character :bold bold :italic italic)))))
+              (rasterise-glyph atlas face character :bold bold :italic italic)))))
 
 (defun atlas-flush (atlas)
   "Upload anything newly rasterised.

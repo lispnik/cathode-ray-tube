@@ -123,7 +123,23 @@ to do with locales."
   (fd -1 :type fixnum)
   (pid -1 :type fixnum)
   argv envp
-  (exit-status nil))
+  (exit-status nil)
+  ;; Guards the PID and the EXIT-STATUS, which two threads reach at once as a
+  ;; matter of course: the reader thread reaps the child when the loop ends, and
+  ;; the main thread calls PTY-CLOSE, and TERMINAL-CLOSE's join is BOUNDED -- so
+  ;; the two genuinely overlap whenever the reaping takes longer than the join
+  ;; will wait.
+  ;;
+  ;; What the lock prevents is not a torn read but a SIGNAL SENT TO A PID THAT IS
+  ;; NO LONGER OURS.  PTY-CLOSE sends SIGHUP and then SIGKILL, and between the
+  ;; other thread's waitpid and this thread's kill the pid belongs to the
+  ;; operating system again.  Reusing it takes a busy machine and some bad luck,
+  ;; and the failure -- an unrelated process dying -- would never be traced back
+  ;; here.
+  (lock (bt2:make-lock :name "crt pty") :read-only t))
+
+(defmacro with-pty-locked ((pty) &body body)
+  `(bt2:with-lock-held ((pty-lock ,pty)) ,@body))
 
 (defun set-winsize (fd rows cols)
   "Tell the kernel the pty is ROWS by COLS, which sends the child SIGWINCH.
@@ -215,7 +231,8 @@ anybody reading the number will expect."
   ;; call after the one that succeeded -- which makes asking twice mean
   ;; something different from asking once, for no reason a caller could guess.
   (when pty
-    (or (pty-exit-status pty)
+    (with-pty-locked (pty)
+      (or (pty-exit-status pty)
         (and (> (pty-pid pty) 0)
              (cffi:with-foreign-object (status :int)
           (let ((result (%waitpid (pty-pid pty) status +wnohang+)))
@@ -225,7 +242,7 @@ anybody reading the number will expect."
                                (logand (ash raw -8) #xff)
                                (+ 128 (logand raw #x7f)))))
                 (setf (pty-pid pty) -1
-                      (pty-exit-status pty) code)))))))))
+                      (pty-exit-status pty) code))))))))))
 
 (defun pty-wait (pty &key (timeout 2.0))
   "Reap the child, waiting for it.  The status, or NIL if there is no child.
@@ -258,17 +275,21 @@ pathological one cannot wedge the reader thread forever either."
                   (sleep 0.002)))))))
 
 (defun blocking-reap (pty)
-  "waitpid with no WNOHANG.  The last resort of PTY-WAIT."
-  (let ((pid (pty-pid pty)))
-    (when (> pid 0)
-      (cffi:with-foreign-object (status :int)
-        (when (> (%waitpid pid status 0) 0)
-          (let* ((raw (cffi:mem-ref status :int))
-                 (code (if (zerop (logand raw #x7f))
-                           (logand (ash raw -8) #xff)
-                           (+ 128 (logand raw #x7f)))))
-            (setf (pty-pid pty) -1
-                  (pty-exit-status pty) code)))))))
+  "waitpid with no WNOHANG.  The last resort of PTY-WAIT.
+
+The lock is held across the wait deliberately: PTY-CLOSE must not start
+signalling a pid this is in the middle of collecting."
+  (with-pty-locked (pty)
+    (let ((pid (pty-pid pty)))
+      (when (> pid 0)
+        (cffi:with-foreign-object (status :int)
+          (when (> (%waitpid pid status 0) 0)
+            (let* ((raw (cffi:mem-ref status :int))
+                   (code (if (zerop (logand raw #x7f))
+                             (logand (ash raw -8) #xff)
+                             (+ 128 (logand raw #x7f)))))
+              (setf (pty-pid pty) -1
+                    (pty-exit-status pty) code))))))))
 
 (defun pty-close (pty)
   "Close the fd, hang the child up, reap it, and free argv and envp.
@@ -276,7 +297,13 @@ pathological one cannot wedge the reader thread forever either."
 SIGHUP then SIGKILL: a shell that has been hung up exits, and one that has not
 noticed within a moment is not going to."
   (when pty
-    (let ((fd (pty-fd pty)) (pid (pty-pid pty)))
+    ;; CLAIM the pid under the lock and set it to -1 in the same breath, so that
+    ;; whichever thread gets here first is the only one that will ever signal or
+    ;; wait on it.  Reading it and clearing it separately is the race this exists
+    ;; to close.
+    (let ((fd (pty-fd pty))
+          (pid (with-pty-locked (pty)
+                 (prog1 (pty-pid pty) (setf (pty-pid pty) -1)))))
       (when (>= fd 0)
         (%close fd)
         (setf (pty-fd pty) -1))
@@ -289,8 +316,7 @@ noticed within a moment is not going to."
                   do (sleep 0.01))
             (unless reaped
               (%kill pid +sigkill+)
-              (%waitpid pid status 0))))
-        (setf (pty-pid pty) -1)))
+              (%waitpid pid status 0))))))
     (%free-string-array (pty-argv pty))
     (%free-string-array (pty-envp pty))
     (setf (pty-argv pty) nil (pty-envp pty) nil))

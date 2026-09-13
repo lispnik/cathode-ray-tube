@@ -141,9 +141,13 @@ apart."
                       "the session must install a key handler")
              (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 1.0d0)
              (is-true (crt.terminal:terminal-alive-p terminal)
-                      "the child must still be running BEFORE we type; ~
-                       exit status ~S"
-                      (crt.terminal:terminal-exit-status terminal))
+                      "the child must still be running BEFORE we type.~%~
+                       exit status ~S, pid ~S, master fd ~S, reader ~:[gone~;alive~]"
+                      (crt.terminal:terminal-exit-status terminal)
+                      (crt.pty:pty-pid (crt.terminal:terminal-pty terminal))
+                      (crt.pty:pty-fd (crt.terminal:terminal-pty terminal))
+                      (let ((thread (crt.terminal:terminal-reader terminal)))
+                        (and thread (bt2:thread-alive-p thread))))
              (is-true (and (synthesize-key window view "h" 4)
                            (synthesize-key window view "i" 34)
                            (synthesize-key window view (string #\Newline) 36))
@@ -407,3 +411,62 @@ Cmd-C and Cmd-V are dead keys rather than commands."
              (menu (objc:invoke item "submenu")))
         (is (= 14 (objc:invoke-into 'integer menu "numberOfItems"))
             "all fourteen profiles should be listed")))))
+
+(test font-source-chooses-between-ours-and-the-machines
+  "fontSource 0 means one of the twenty-six faces we ship; 1 means an installed
+family (fontmanager.cpp:434).
+
+All fourteen built-in profiles say 0, which is exactly why this was easy to
+leave unimplemented and easy not to notice: it is reachable only through the
+settings window or an imported profile, and until it worked such a profile
+silently got whichever bundled face its fontName happened to resolve to -- or
+the default, when it resolved to nothing.
+
+A system family also takes the SMOOTH zoom path rather than the integer one:
+there is no table row saying it is a bitmap design with one true size, because
+there is no table row at all."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (let ((families (crt.text:system-monospace-families)))
+      (is-true families "this machine must have some monospace family")
+      (flet ((variant (source name)
+               (crt.settings:profile-from-alist
+                (list (cons "fontSource" source) (cons "fontName" name))
+                :into (copy-structure (crt.settings:find-profile "Commodore PET")))))
+        (let ((bundled (variant 0 "COMMODORE_PET_SCALED"))
+              (system (variant 1 (or (find "Menlo" families :test #'string=)
+                                     (first families)))))
+          (is-false (crt.ui:profile-system-font-p bundled) "0 is ours")
+          (is-true (crt.ui:profile-system-font-p system) "1 is the machine's")
+          (multiple-value-bind (font face scale) (crt.ui:load-profile-font bundled)
+            (unwind-protect
+                 (progn
+                   (is (eq :commodore-pet face) "a bundled profile names a face")
+                   (is (= 8 (crt.text:font-pixel-size font))
+                       "loaded at PetMe's one true size"))
+              (crt.text:release-font font))
+            (is (>= scale 1) "and magnified by a whole number"))
+          (multiple-value-bind (font face scale) (crt.ui:load-profile-font system)
+            (unwind-protect
+                 (progn
+                   (is-true font "the system family must load")
+                   (is (null face)
+                       "and must NOT claim to be one of ours, or the fallback
+chain and the magnification both ask a table a question it cannot answer")
+                   (is (= 1 scale) "an outline is drawn at the size it is asked for"))
+              (crt.text:release-font font)))
+          ;; A family this machine does not have must not refuse to open a
+          ;; window: profiles travel between machines.  It falls back to the
+          ;; DEFAULT face rather than to the profile's usual one, and that is
+          ;; forced rather than chosen -- for a fontSource-1 profile fontName is
+          ;; the family, so there is no bundled name left in the profile to
+          ;; resolve back to.
+          (multiple-value-bind (font face scale)
+              (crt.ui:load-profile-font (variant 1 "No Such Family At All"))
+            (unwind-protect
+                 (progn
+                   (is-true font "a missing family must still yield a font")
+                   (is (eq crt.ui::*default-font* face)
+                       "and it must be the default face, got ~S" face)
+                   (is (>= scale 1) "magnified like the bundled face it now is"))
+              (crt.text:release-font font))))))))

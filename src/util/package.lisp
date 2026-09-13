@@ -159,7 +159,7 @@
                     (#:pty #:cathode-ray-tube.pty))
   (:export
    #:terminal #:make-terminal #:terminal-close
-   #:terminal-vt #:terminal-pty #:terminal-lock
+   #:terminal-vt #:terminal-pty #:terminal-reader #:terminal-lock
    #:terminal-rows #:terminal-cols #:terminal-resize
    #:terminal-bell-count #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
    #:terminal-send #:terminal-send-string #:terminal-paste
@@ -197,7 +197,10 @@
    #:render-text #:text-grid-size #:grid-pixel-size #:resize-text-renderer
    #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
    #:text-renderer-cell-width #:text-renderer-cell-height
-   #:text-renderer-font-width #:cell-advance
+   #:text-renderer-font-width #:text-renderer-fallbacks #:cell-advance
+   #:bundled-font-fallback #:font-fallback-chain #:load-family-font
+   #:system-monospace-families
+   #:*system-fallback-family* #:font-for-character
    ;; the terminal-size overlay
    #:overlay #:make-overlay #:release-overlay #:overlay-note-size
    #:overlay-visible-p #:overlay-alpha #:render-overlay
@@ -227,6 +230,7 @@
   (:local-nicknames (#:util #:cathode-ray-tube.util))
   (:export
    #:ensure-appkit #:register-application-defaults #:handling-errors #:run
+   #:load-profile-font #:profile-system-font-p
    #:crt-view #:view-layer #:view-link #:view-frame-skip #:view-effect-time
    #:view-frames #:view-drawable-size #:view-draw-function
    #:attach-metal-layer #:set-view-opaque

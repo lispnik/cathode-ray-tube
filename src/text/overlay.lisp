@@ -117,7 +117,8 @@ while the mouse is down."
       (incf n)
       (loop for i below (length text)
             for character = (char text i)
-            for glyph = (atlas-glyph atlas font character)
+            for glyph = (atlas-glyph atlas font character
+                                     :fallbacks (text-renderer-fallbacks renderer))
             do (when (plusp (glyph-width glyph))
                  (write-instance
                   buffer n alpha alpha alpha alpha

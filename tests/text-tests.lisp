@@ -578,3 +578,64 @@ dynamic pass keeps the job of presenting the drawable."
               (crt.text:release-overlay overlay)
               (crt.text:release-text-renderer renderer)
               (crt.text:release-font font)))))))
+
+(test a-face-with-no-glyph-borrows-one-from-the-chain
+  "Commodore PET has no Greek and no snowman, and a terminal is shown whatever
+bytes arrive.
+
+Without a substitution chain those cells come out BLANK -- not wrong-looking,
+blank -- so a program printing a lambda renders a hole, which reads as this
+program being broken rather than as the font being from 1977.  fontmanager.cpp
+gives each of these faces a fallback (PET's is Unscii 8) and appends the system
+monospace after it, and BOTH levels are exercised here because they fail
+differently: the first is a table in this file, the second is whatever the
+machine has installed.
+
+Measured coverage, not assumed: PET turns out to have box-drawing, block
+elements, a smiley and a euro sign, so the obvious candidates for `a character an
+eight-bit face cannot have' are all wrong.  Greek alpha is in Unscii 8 and not in
+PET; the snowman is in neither and in Menlo.
+
+Asserting on which FACE answers rather than on pixels: the pixels of a borrowed
+glyph are the fallback's business, and the choice of face is ours."
+  (when (gpu-or-skip)
+    (let ((pet (crt.text:load-bundled-font :commodore-pet)))
+      (if (null pet)
+          (skip "the bundled fonts are not present")
+          (let ((chain (crt.text:font-fallback-chain :commodore-pet)))
+            (unwind-protect
+                 (let ((own (first chain))
+                       (system (second chain))
+                       (alpha (code-char #x03B1))
+                       (snowman (code-char #x2603)))
+                   (is (eq :unscii-8 (crt.text:bundled-font-fallback :commodore-pet))
+                       "PET's declared fallback is Unscii 8")
+                   (is (= 2 (length chain))
+                       "the face's own fallback, then the system one; got ~S"
+                       (length chain))
+                   (is (eq pet (crt.text:font-for-character pet #\A chain))
+                       "a character the face HAS must not be borrowed")
+                   ;; The premise, asserted: if PET grew these glyphs the rest of
+                   ;; this test would pass while testing nothing.
+                   (is (zerop (crt.text::glyph-for-character pet alpha))
+                       "PET must really lack Greek alpha, or this proves nothing")
+                   (is (zerop (crt.text::glyph-for-character pet snowman))
+                       "nor a snowman")
+                   (is (plusp (crt.text::glyph-for-character own alpha))
+                       "and Unscii 8 must really have the alpha")
+                   (is (zerop (crt.text::glyph-for-character own snowman))
+                       "and must NOT have the snowman, or the second level is
+never reached")
+                   (is (eq own (crt.text:font-for-character pet alpha chain))
+                       "the alpha comes from the face's own fallback")
+                   (is (eq system (crt.text:font-for-character pet snowman chain))
+                       "and the snowman from the system one, two levels down")
+                   ;; The chain running out is the ordinary case for a private-use
+                   ;; codepoint, and the answer is the primary face -- so the
+                   ;; caller still has something to measure the cell with and gets
+                   ;; the blank RASTERISE-GLYPH draws rather than an error.
+                   (is (eq pet (crt.text:font-for-character pet (code-char #xE000)
+                                                            chain))
+                       "an unmapped character falls back to the face itself"))
+              (dolist (font chain) (crt.text:release-font font))
+              (crt.text:release-font pet)))))))

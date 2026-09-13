@@ -133,3 +133,32 @@ one noise, not hundreds."
     (let ((text (crt.terminal:with-terminal-locked (term)
                   (crt.vt:vt-text (crt.terminal:terminal-vt term) 0 1))))
       (is (search "abc" text) "the BELs must not appear in the text, got ~S" text))))
+
+(test a-child-that-is-only-waiting-stays-alive
+  "A child with nothing to do must still be there a moment later.
+
+This exists to localize a failure that has only ever appeared on one CI runner:
+TYPING-REACHES-THE-CHILD reports its child GONE before a key is even
+synthesized, which is a statement about the pty layer and not about typing.  The
+same child, spawned the same way, asserted here -- where it runs on every runner
+and on ECL too.
+
+If this goes red, the fault is below the UI entirely and the typing test is a
+bystander.  If it stays green while the typing test does not, the difference is
+something the window, the view or the display link is doing, and that is a much
+smaller place to look."
+  (with-terminal (term :rows 24 :cols 80 :command '("/usr/bin/tr" "a-z" "A-Z"))
+    (is-true (crt.terminal:terminal-alive-p term)
+             "dead on arrival: exit status ~S, pid ~S"
+             (crt.terminal:terminal-exit-status term)
+             (crt.pty:pty-pid (crt.terminal:terminal-pty term)))
+    ;; Long enough to cover the second the UI test spends pumping events.
+    (is-false (wait-until (lambda () (not (crt.terminal:terminal-alive-p term)))
+                          :timeout 1.5)
+              "the child exited on its own with status ~S"
+              (crt.terminal:terminal-exit-status term))
+    ;; And it really is listening: what goes in comes back transformed, which is
+    ;; the half the UI test cannot reach without a window.
+    (crt.terminal:terminal-send-string term (format nil "hi~%"))
+    (is-true (wait-until (lambda () (search "HI" (screen-text term))))
+             "tr never answered; screen was ~S" (screen-text term))))

@@ -253,6 +253,15 @@ faces, which are outlines and are rasterised at the size they are drawn."
       (screen-backing-scale)
       1))
 
+(defun profile-system-font-p (profile)
+  "True when PROFILE's fontName names an INSTALLED family rather than one of ours.
+
+fontSource is 0 for bundled and 1 for system (fontmanager.cpp:434), and all
+fourteen built-in profiles say 0 -- so this is reachable only through the
+settings window or an imported profile, which is exactly why it was easy to
+leave unimplemented and easy not to notice."
+  (and profile (eql 1 (crt.settings:profile-font-source profile))))
+
 (defun profile-font (profile &optional override)
   "The bundled face PROFILE asks for.
 
@@ -261,10 +270,47 @@ is half of what distinguishes the fourteen looks -- Commodore PET is PetMe and
 Apple ][ is PrintChar21, and rendering both in IBM VGA makes the port look far
 less faithful than its shader work actually is.  A name this build does not
 ship falls back to the default rather than refusing to open a window, since a
-profile written by a newer cool-retro-term may name a face we do not have."
+profile written by a newer cool-retro-term may name a face we do not have.
+
+Meaningless for a fontSource-1 profile, whose fontName is a family this machine
+has rather than a face we ship: LOAD-PROFILE-FONT is what decides between them."
   (or override
       (crt.text:font-for-profile-name (crt.settings:profile-font-name profile))
       *default-font*))
+
+(defun load-profile-font (profile &key override pixel-size)
+  "(values FONT FACE SCALE) for PROFILE: what to draw with and how far to magnify.
+
+FACE is the bundled keyword, or NIL for a system family -- which is what tells
+the fallback chain and the magnification apart, since neither has an answer for
+a family we know nothing about.
+
+A system family that will not load falls back rather than refusing to open the
+window -- a profile naming a font the machine it was written on happened to have
+is a thing that travels between machines, and the wrong font is a much better
+outcome than no terminal.  It falls back to the DEFAULT face and not to the
+profile's usual one, because for a fontSource-1 profile fontName IS the family:
+there is no bundled name left in the profile to resolve."
+  (let ((face (profile-font profile override)))
+    (flet ((system-font ()
+             (when (and (null override) (profile-system-font-p profile))
+               (let ((family (crt.settings:profile-font-name profile)))
+                 (when (and family (plusp (length family)))
+                   (crt.text:load-family-font
+                    family (or pixel-size
+                               (crt.text:bundled-font-native-size *default-font*))))))))
+      (let ((system (system-font)))
+        (cond
+          ;; Scale 1: a system family is an outline rasterised at the size it is
+          ;; drawn, so there is nothing to magnify by a whole number.  FACE NIL
+          ;; says "not one of ours", which is what the fallback chain needs to
+          ;; know, since it has no table entry for a family we know nothing about.
+          (system (values system nil 1))
+          (t (let ((font (crt.text:load-bundled-font face :pixel-size pixel-size)))
+               (unless font
+                 (error "Could not load a font for profile ~S."
+                        (crt.settings:profile-name profile)))
+               (values font face (font-scale-for face)))))))))
 
 (defun make-session (&key width height (columns *default-columns*)
                           (rows *default-rows*) command directory
@@ -281,12 +327,8 @@ whatever size the window is dragged to."
                      (error "No profile named ~S." profile)))
          ;; The PROFILE is resolved first, because it is what decides the face,
          ;; and the face is what decides the cell size, which decides the window.
-         (face (profile-font chosen font))
-         (loaded (crt.text:load-bundled-font face))
-         (scale (font-scale-for face))
          (margin (crt.settings:margin chosen)))
-    (unless loaded
-      (error "Could not load the bundled font ~S." face))
+    (multiple-value-bind (loaded face scale) (load-profile-font chosen :override font)
     ;; Device pixels for the grid, then points for the window: AppKit sizes
     ;; windows in points and the glyphs are in device pixels, and conflating the
     ;; two gives a window half the size it should be on a Retina display.
@@ -300,13 +342,13 @@ whatever size the window is dragged to."
         (let ((backing (screen-backing-scale)))
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
-    (make-session-in-window loaded scale margin width height title command
-                            directory chosen effects)))
+    (make-session-in-window loaded face scale margin width height title command
+                            directory chosen effects))))
 
 (defconstant +min-font-scaling+ 0.25d0)
 (defconstant +max-font-scaling+ 2.5d0)
 
-(defun make-session-in-window (loaded scale margin width height title command
+(defun make-session-in-window (loaded face scale margin width height title command
                                directory profile effects)
   (let* ((window (make-crt-window :width width :height height :title title
                                   :draw-function #'draw-session))
@@ -319,11 +361,15 @@ whatever size the window is dragged to."
           (crt.settings:settings-effects-frame-skip crt.settings:*settings*))
     (destructuring-bind (dw dh) (view-drawable-size view)
       (multiple-value-bind (line-spacing font-width) (profile-metrics profile)
-      (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh
-                                                    :scale scale
-                                                    :margin margin
-                                                    :line-spacing line-spacing
-                                                    :font-width font-width))
+      (let* ((renderer (crt.text:make-text-renderer
+                        :font loaded :width dw :height dh
+                        :scale scale
+                        :margin margin
+                        :line-spacing line-spacing
+                        :font-width font-width
+                        :fallbacks (crt.text:font-fallback-chain
+                                    face
+                                    :pixel-size (crt.text:font-pixel-size loaded))))
              (session (%make-session :window window :view view
                                      :renderer renderer :font loaded
                                      :margin (float margin 1.0)
@@ -422,10 +468,15 @@ pixel size and is smooth.  A BITMAP face has one true size and is magnified by a
 whole number, so zoom changes that number -- which is coarse, and is the honest
 consequence of magnifying bitmaps by integers rather than interpolating them."
   (let* ((profile (session-profile session))
-         (face (profile-font profile))
-         (low-res (crt.text:bundled-font-low-resolution-p face))
+         (system (profile-system-font-p profile))
+         (face (unless system (profile-font profile)))
+         ;; A system family is an outline and takes the smooth path, whatever it
+         ;; happens to be called: there is no table entry saying otherwise, and
+         ;; asking BUNDLED-FONT-LOW-RESOLUTION-P about a family we do not ship
+         ;; would be asking a table a question it has no row for.
+         (low-res (and face (crt.text:bundled-font-low-resolution-p face)))
          (zoom (session-font-scaling session))
-         (base (font-scale-for face)))
+         (base (if face (font-scale-for face) 1)))
     (multiple-value-bind (pixel-size scale)
         (if low-res
             ;; UTIL:QROUND, not CL:ROUND.  With a base of 2 and a zoom of 1.25
@@ -436,7 +487,10 @@ consequence of magnifying bitmaps by integers rather than interpolating them."
             (values (crt.text:bundled-font-native-size face)
                     (max 1 (util:qround (* base zoom))))
             (values (max 6 (util:qround (* 24 zoom))) 1))
-      (let ((font (crt.text:load-bundled-font face :pixel-size pixel-size)))
+      (let ((font (if system
+                      (crt.text:load-family-font
+                       (crt.settings:profile-font-name profile) pixel-size)
+                      (crt.text:load-bundled-font face :pixel-size pixel-size))))
         (unless font (return-from apply-font-scaling nil))
         (when (session-font session) (crt.text:release-font (session-font session)))
         (crt.text:release-text-renderer (session-renderer session))
@@ -446,11 +500,14 @@ consequence of magnifying bitmaps by integers rather than interpolating them."
             (setf (session-font session) font
                   (session-scale session) scale
                   (session-renderer session)
-                  (crt.text:make-text-renderer :font font :width dw :height dh
-                                               :scale scale
-                                               :margin (session-margin session)
-                                               :line-spacing line-spacing
-                                               :font-width font-width)))
+                  (crt.text:make-text-renderer
+                   :font font :width dw :height dh
+                   :scale scale
+                   :margin (session-margin session)
+                   :line-spacing line-spacing
+                   :font-width font-width
+                   :fallbacks (crt.text:font-fallback-chain
+                               face :pixel-size (crt.text:font-pixel-size font)))))
           (fit-terminal-to-view session))
         t))))
 

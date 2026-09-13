@@ -48,6 +48,54 @@ also means a user's own font with the same family name cannot shadow ours."
                                        :pointer (cffi:null-pointer) :pointer)))
           (cffi:foreign-funcall "CFRelease" :pointer descriptors :void))))))
 
+(defun font-from-family (family size)
+  "A retained CTFont for an INSTALLED family, or NIL where there is no such one.
+
+For the system fallback and nothing else.  -[NSFont fontWithName:size:] answers
+nil for a family that is not installed, which is the honest answer and the one
+FONT-FALLBACK-CHAIN wants -- a machine without Menlo should lose its last-resort
+fallback, not its window.
+
+Retained here so that RELEASE-FONT can treat every font the same way, however it
+arrived: -fontWithName: returns an autoreleased object and the rest of this file
+returns Create-rule ones."
+  (metal:with-metal
+    (let ((font (objc:invoke "NSFont" "fontWithName:size:" family (float size 1d0))))
+      (unless (or (null font) (metal:null-object-p font))
+        (objc:retain font)
+        (objc:objc-object-pointer font)))))
+
+(defun system-monospace-families ()
+  "Every installed monospace family, sorted.
+
+fontSource 1 in a profile means `not one of ours, one of the machine's', and
+this is the list it names into.  Upstream asks QFontDatabase for every family
+and keeps the fixed-pitch ones (fontmanager.cpp:27-42); -[NSFont isFixedPitch]
+is the same question asked of AppKit, which is better than the alternative of
+remembering that NSFixedPitchFontMask is 1024.
+
+Slow enough to be worth not calling per frame -- it makes one NSFont per
+installed family -- and fast enough that caching it would mean deciding when to
+notice a font being installed.  The settings window asks once when it opens."
+  (metal:with-metal
+    (let ((manager (objc:invoke "NSFontManager" "sharedFontManager"))
+          (families '()))
+      (let* ((array (objc:invoke manager "availableFontFamilies"))
+             (count (objc:invoke-into 'integer array "count")))
+        (dotimes (i count)
+          (let* ((family (objc:invoke-into 'string array "objectAtIndex:" i))
+                 (font (and family
+                            (objc:invoke "NSFont" "fontWithName:size:" family 12d0))))
+            (when (and font (not (metal:null-object-p font))
+                       (objc:invoke-bool font "isFixedPitch"))
+              (push family families)))))
+      (sort families #'string-lessp))))
+
+(defun load-family-font (family &optional (pixel-size 16))
+  "An installed family as a FONT, measured, or NIL."
+  (let ((handle (font-from-family family pixel-size)))
+    (when handle (measure-font (%make-font handle pixel-size)))))
+
 (defun glyph-for-character (font character)
   "The glyph id for CHARACTER, or 0 when the face has no glyph for it.
 
@@ -133,19 +181,19 @@ happens to be in it."
 (defparameter +bundled-fonts+
   '((:terminess          "terminus/TerminessNerdFontMono-Regular.ttf"       12 t)
     (:bigblue-terminal   "bigblue-terminal/BigBlueTerm437NerdFontMono-Regular.ttf" 12 t)
-    (:fixedsys-excelsior "fixedsys-excelsior/FSEX301-L2.ttf"                16 t)
-    (:greybeard          "greybeard/Greybeard-16px.ttf"                     16 t)
-    (:commodore-pet      "pet-me/PetMe.ttf"                                  8 t)
-    (:commodore-64       "pet-me/PetMe64.ttf"                                8 t)
+    (:fixedsys-excelsior "fixedsys-excelsior/FSEX301-L2.ttf"                16 t :unscii-16)
+    (:greybeard          "greybeard/Greybeard-16px.ttf"                     16 t :unscii-16)
+    (:commodore-pet      "pet-me/PetMe.ttf"                                  8 t :unscii-8)
+    (:commodore-64       "pet-me/PetMe64.ttf"                                8 t :unscii-8)
     (:gohu               "gohu/GohuFont11NerdFontMono-Regular.ttf"          11 t)
     (:cozette            "cozette/CozetteVector.ttf"                        13 t)
     (:unscii-8           "unscii/unscii-8.ttf"                               8 t)
-    (:unscii-8-thin      "unscii/unscii-8-thin.ttf"                          8 t)
+    (:unscii-8-thin      "unscii/unscii-8-thin.ttf"                          8 t :unscii-8)
     (:unscii-16          "unscii/unscii-16-full.ttf"                        16 t)
-    (:apple-ii           "apple2/PrintChar21.ttf"                            8 t)
-    (:atari-400          "atari-400-800/AtariClassic-Regular.ttf"            8 t)
-    (:ibm-ega-8x8        "oldschool-pc-fonts/PxPlus_IBM_EGA_8x8.ttf"         8 t)
-    (:ibm-vga-8x16       "oldschool-pc-fonts/PxPlus_IBM_VGA_8x16.ttf"       16 t)
+    (:apple-ii           "apple2/PrintChar21.ttf"                            8 t :unscii-8)
+    (:atari-400          "atari-400-800/AtariClassic-Regular.ttf"            8 t :unscii-8)
+    (:ibm-ega-8x8        "oldschool-pc-fonts/PxPlus_IBM_EGA_8x8.ttf"         8 t :unscii-8)
+    (:ibm-vga-8x16       "oldschool-pc-fonts/PxPlus_IBM_VGA_8x16.ttf"       16 t :unscii-16)
     (:departure-mono     "departure-mono/DepartureMonoNerdFontMono-Regular.otf" 11 t)
     ;; The "modern" faces: rendered at the target pixel height with no
     ;; magnification, and the only ones offered when rasterisation is Modern.
@@ -157,12 +205,31 @@ happens to be in it."
     (:ibm-3278           "ibm-3278/3270NerdFontMono-Regular.ttf"            32 nil)
     (:source-code-pro    "source-code-pro/SauceCodeProNerdFontMono-Regular.ttf" 32 nil)
     (:opendyslexic       "opendyslexic/OpenDyslexicMNerdFontMono-Regular.otf" 32 nil))
-  "(KEYWORD RELATIVE-PATH NATIVE-PIXEL-SIZE LOW-RESOLUTION-P).
+  "(KEYWORD RELATIVE-PATH NATIVE-PIXEL-SIZE LOW-RESOLUTION-P &optional FALLBACK).
 
 NATIVE-PIXEL-SIZE is the size a low-resolution face is designed for and must be
 rendered at: magnifying its native pixels by a whole number is what keeps them
 square, and rasterising it at some other size is what makes it look like a
-blurry version of itself.")
+blurry version of itself.
+
+FALLBACK is the face to ask when this one has no glyph, and the column is
+upstream's, transcribed from the addBundledFont calls at fontmanager.cpp:201-379.
+It matters more than it looks: these are 8x16 bitmap designs from machines that
+had 128 characters, and a terminal shows whatever bytes arrive.  Without it a
+Commodore PET running anything that draws a box gets a screen of blanks, which
+reads as the program being broken rather than as the font being from 1977.
+
+Upstream names UNSCII_8 and UNSCII_16 as their own fallbacks and then skips the
+substitution when it equals the face; the column is simply left empty here, which
+is the same thing said once instead of twice.")
+
+(defparameter *system-fallback-family* "Menlo"
+  "The last resort, after a face's own fallback.
+
+fontmanager.cpp:509 appends it on macOS and `Monospace' everywhere else, so this
+is the whole of that conditional.  A variable rather than a constant because a
+machine without Menlo is a machine where the right answer is to say so and carry
+on, and because the tests need to be able to ask for a face that does not exist.")
 
 (defparameter +profile-font-names+
   '(("TERMINESS_SCALED"        . :terminess)
@@ -216,6 +283,35 @@ than refusing to open the window."
 
 (defun bundled-font-low-resolution-p (name)
   (fourth (assoc name +bundled-fonts+)))
+
+(defun bundled-font-fallback (name)
+  "The face to ask when NAME has no glyph, or NIL."
+  (fifth (assoc name +bundled-fonts+)))
+
+(defun font-fallback-chain (name &key (pixel-size (and name (bundled-font-native-size name))))
+  "The faces to try after NAME, in order, already loaded at PIXEL-SIZE.
+
+The face's own fallback first and the system monospace last, which is
+fontmanager.cpp:499-513 exactly.  Loaded at the PRIMARY face's pixel size rather
+than at their own: a glyph borrowed from another face has to sit in this face's
+cell, and one rasterised at a different size would be visibly a different size.
+
+Anything that will not load is dropped rather than signalled.  A missing fallback
+means a blank glyph, which is where this started; it is not a reason to refuse to
+open a window."
+  (let ((chain '()))
+    ;; NAME may be NIL -- a system family, which has no table entry and so no
+    ;; declared fallback.  It still gets the system one, which is the whole of
+    ;; what upstream gives a system font too.
+    (let ((own (and name (bundled-font-fallback name))))
+      (when (and own (not (eq own name)))
+        (let ((font (ignore-errors (load-bundled-font own :pixel-size pixel-size))))
+          (when font (push font chain)))))
+    (when *system-fallback-family*
+      (let ((font (ignore-errors (load-family-font *system-fallback-family*
+                                                   pixel-size))))
+        (when font (push font chain))))
+    (nreverse chain)))
 
 (defun load-bundled-font (name &key pixel-size)
   "Load a bundled face by keyword, at its native size unless told otherwise."

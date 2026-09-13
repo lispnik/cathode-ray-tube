@@ -63,6 +63,11 @@ the structure's 16-byte alignment is satisfied without padding.")
   ;; both of them look wrong without it -- the PET's characters are meant to be
   ;; noticeably wide.  There is no height equivalent; upstream has none either.
   (font-width 1.0d0 :type double-float)
+  ;; The substitution chain: the face's own fallback, then the system monospace.
+  ;; Held by the renderer rather than by the font because it is loaded at the
+  ;; PRIMARY face's pixel size, so it belongs to the pairing rather than to
+  ;; either face.
+  (fallbacks '() :type list)
   (margin 0.0 :type single-float)
   ;; The instance buffer: an MTLBuffer in SHARED storage, written in place.
   ;; Two instances per cell is the worst case -- a background and a glyph --
@@ -130,7 +135,8 @@ what a terminal defaulting to 80x25 wants."
           (+ (* rows scale (line-height font line-spacing)) (* 2 margin))))
 
 (defun make-text-renderer (&key font width height (margin 0.0) (scale 1)
-                                (line-spacing 0d0) (font-width 1.0d0))
+                                (line-spacing 0d0) (font-width 1.0d0)
+                                (fallbacks '()))
   (let* ((atlas (make-atlas))
          (renderer (%make-text-renderer
                     :font font
@@ -141,6 +147,7 @@ what a terminal defaulting to 80x25 wants."
                                    (* (max 1d0 (font-cell-height font))
                                       line-spacing))
                     :font-width (float font-width 1d0)
+                    :fallbacks fallbacks
                     :cell-width (float (* scale (cell-advance font font-width)) 1.0)
                     :cell-height (float (* scale (line-height font line-spacing))
                                         1.0)
@@ -164,7 +171,12 @@ what a terminal defaulting to 80x25 wants."
   (when (text-renderer-instances renderer)
     (metal:release-buffer (text-renderer-instances renderer))
     (setf (text-renderer-instances renderer) nil
-          (text-renderer-instance-capacity renderer) 0)))
+          (text-renderer-instance-capacity renderer) 0))
+  ;; The chain is loaded for this renderer and owned by it.  The PRIMARY font is
+  ;; not -- the session loaded that and releases it itself.
+  (dolist (fallback (text-renderer-fallbacks renderer))
+    (release-font fallback))
+  (setf (text-renderer-fallbacks renderer) '()))
 
 (defun resize-text-renderer (renderer width height)
   "Fit the grid to WIDTH by HEIGHT device pixels and remake the target."
@@ -318,7 +330,9 @@ second pass."
                      (glyph (atlas-glyph atlas font (vt:cell-char cell)
                                          :bold (vt:attr-set-p attrs vt:+attr-bold+)
                                          :italic (vt:attr-set-p attrs
-                                                                vt:+attr-italic+))))
+                                                                vt:+attr-italic+)
+                                         :fallbacks (text-renderer-fallbacks
+                                                     renderer))))
                 (when (plusp (glyph-width glyph))
                   (multiple-value-bind (fr fg fb)
                       (cell-colors cell default-fg default-bg
