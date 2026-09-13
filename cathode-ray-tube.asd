@@ -129,6 +129,7 @@ and terminal emulation by a vendored libvterm."
   ((:module "tests"
     :serial t
     :components ((:file "package")
+                 (:file "seam-tests")
                  (:file "math-tests")
                  (:file "color-tests")
                  (:file "profile-tests")
