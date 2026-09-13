@@ -315,7 +315,7 @@ there is no bundled name left in the profile to resolve."
 (defun make-session (&key width height (columns *default-columns*)
                           (rows *default-rows*) command directory
                           font (title "cathode-ray-tube")
-                          (profile *default-profile*) (effects t))
+                          (profile *default-profile*) (effects t) tab-of)
   "A window running a shell.  Main thread only.
 
 Sized from COLUMNS by ROWS unless WIDTH and HEIGHT say otherwise -- the opposite
@@ -343,13 +343,13 @@ whatever size the window is dragged to."
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
     (make-session-in-window loaded face scale margin width height title command
-                            directory chosen effects))))
+                            directory chosen effects tab-of))))
 
 (defconstant +min-font-scaling+ 0.25d0)
 (defconstant +max-font-scaling+ 2.5d0)
 
 (defun make-session-in-window (loaded face scale margin width height title command
-                               directory profile effects)
+                               directory profile effects &optional tab-of)
   (let* ((window (make-crt-window :width width :height height :title title
                                   :draw-function #'draw-session))
          (view (crt-window-view window)))
@@ -420,7 +420,7 @@ whatever size the window is dragged to."
         (when (crt.settings:settings-show-terminal-size crt.settings:*settings*)
           (setf (session-overlay session) (crt.text:make-overlay)))
         (push session *sessions*)
-        (show-crt-window window)
+        (show-crt-window window :tab-of (and tab-of (session-window tab-of)))
         session)))))
 
 (defun end-session (session)

@@ -94,6 +94,7 @@ after the application with About and Quit in it."
 
     (let ((file (submenu bar "File")))
       (menu-item file "New Window" "crtNewWindow:" "n")
+      (menu-item file "New Tab" "crtNewTab:" "t")
       (menu-separator file)
       (menu-item file "Close" "crtCloseWindow:" "w"))
 
@@ -114,7 +115,28 @@ after the application with About and Quit in it."
       (menu-item view "Zoom Out" "crtZoomOut:" "-")
       (menu-item view "Actual Size" "crtZoomReset:" "0")
       (menu-separator view)
-      (menu-item view "Effects" "crtToggleEffects:" nil :state 1))
+      (menu-item view "Effects" "crtToggleEffects:" nil :state 1)
+      (menu-separator view)
+      ;; NSWindow implements these four itself, so they need no target: the
+      ;; responder chain finds the key window, which is the right one.  They are
+      ;; what makes the system tab bar usable, and reimplementing them would be
+      ;; reimplementing the part macOS already does well.
+      (menu-item view "Show All Tabs" "toggleTabOverview:" nil :target nil)
+      (menu-item view "Show Tab Bar" "toggleTabBar:" nil :target nil)
+      (menu-item view "Show Next Tab" "selectNextTab:" "]"
+                 :modifiers (logior +modifier-command+ +modifier-shift+)
+                 :target nil)
+      (menu-item view "Show Previous Tab" "selectPreviousTab:" "["
+                 :modifiers (logior +modifier-command+ +modifier-shift+)
+                 :target nil)
+      (menu-separator view)
+      ;; Cmd-1 through Cmd-9, as upstream binds Meta+1 through Meta+9.  Nine
+      ;; items rather than a loop because each needs its own selector: a menu
+      ;; item carries an action and no argument.
+      (loop for index from 1 to 9
+            do (menu-item view (format nil "Tab ~D" index)
+                          (format nil "crtSelectTab~D:" index)
+                          (princ-to-string index))))
 
     ;; The Profiles menu is the only way to change look at run time, and its
     ;; absence was the most visible thing missing from this program.

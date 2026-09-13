@@ -232,6 +232,7 @@
   (:export
    #:ensure-appkit #:register-application-defaults #:handling-errors #:run
    #:load-profile-font #:profile-system-font-p
+   #:window-tab-group #:window-tabs #:select-window-tab
    #:crt-view #:view-layer #:view-link #:view-frame-skip #:view-effect-time
    #:view-frames #:view-drawable-size #:view-draw-function
    #:attach-metal-layer #:set-view-opaque

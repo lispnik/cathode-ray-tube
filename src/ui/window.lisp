@@ -65,11 +65,58 @@
       (push window *windows*)
       window)))
 
-(defun show-crt-window (window)
-  (objc:invoke (crt-window-handle window) "makeKeyAndOrderFront:" nil)
+(defconstant +ns-window-above+ 1
+  "NSWindowAbove.  -addTabbedWindow:ordered: takes an NSWindowOrderingMode, whose
+three values are the same NSWindowOut/Below/Above that -orderWindow:relativeTo:
+has taken since NeXT.")
+
+(defun show-crt-window (window &key tab-of)
+  "Put WINDOW on screen and start its clock.
+
+TAB-OF makes it a TAB of that window rather than a window of its own, using
+macOS's own tabbing.  Upstream draws its own tab bar in QML -- TerminalTabs.qml
+-- because Qt has nothing else to offer; on this platform reusing the system's
+gets the tab bar, the overview, drag-a-tab-out-to-a-window, Cmd-Shift-bracket and
+the window menu's tab commands, all of which would otherwise be reimplemented
+badly.  Each tab stays a real NSWindow with its own view, layer and display
+link, so nothing below this line has to know that tabs exist."
+  (let ((handle (crt-window-handle window)))
+    (when tab-of
+      (objc:invoke (crt-window-handle tab-of) "addTabbedWindow:ordered:"
+                   handle +ns-window-above+))
+    ;; After -addTabbedWindow:, not instead of it: joining a tab group puts the
+    ;; window in the group but does not select it, and a new tab that opened
+    ;; behind the one you were looking at would be a strange thing to ask for.
+    (objc:invoke handle "makeKeyAndOrderFront:" nil))
   (objc:invoke (objc.runloop:shared-application) "activateIgnoringOtherApps:" t)
   (start-display-link (crt-window-view window))
   window)
+
+(defun window-tab-group (window)
+  "WINDOW's NSWindowTabGroup, or NIL when it is not in one."
+  (let ((group (objc:invoke (crt-window-handle window) "tabGroup")))
+    (unless (crt.metal:null-object-p group) group)))
+
+(defun window-tabs (window)
+  "Every window in WINDOW's tab group, in order, as pointers.  WINDOW alone when
+it is not tabbed."
+  (let ((group (window-tab-group window)))
+    (if (null group)
+        (list (objc:objc-object-pointer (crt-window-handle window)))
+        (let* ((windows (objc:invoke group "windows"))
+               (count (objc:invoke-into 'integer windows "count")))
+          (loop for i below count
+                collect (objc:objc-object-pointer
+                         (objc:invoke windows "objectAtIndex:" i)))))))
+
+(defun select-window-tab (window index)
+  "Bring the INDEXth tab of WINDOW's group forward.  NIL when there is no such tab."
+  (let ((tabs (window-tabs window)))
+    (when (< -1 index (length tabs))
+      (let ((group (window-tab-group window)))
+        (when group
+          (objc:invoke group "setSelectedWindow:" (nth index tabs))
+          (nth index tabs))))))
 
 (defun close-crt-window (window)
   "Stop the clock and forget the window.  Idempotent: -windowWillClose: can

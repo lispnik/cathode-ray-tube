@@ -93,6 +93,40 @@ menu is built first."
 (define-action "crtNewWindow:" ()
   (make-session))
 
+(define-action "crtNewTab:" (session)
+  "A new terminal in the key window's tab group, or a window if there is none.
+
+The new tab inherits the current one's PROFILE, which is what makes a window of
+tabs look like one terminal rather than several.  It does NOT inherit the
+shell's working directory: knowing that means the child telling us, through OSC
+7 or an equivalent, and a tab that opened in the right directory for bash and
+the wrong one for everything else would be worse than one that is honestly
+always home.  Upstream does not inherit it either."
+  (if session
+      (make-session :tab-of session
+                    :profile (crt.settings:profile-name (session-profile session)))
+      (make-session)))
+
+(defmacro define-tab-action (selector index)
+  "Cmd-N brings the Nth tab forward, doing nothing when there is no such tab.
+
+Upstream binds Meta+1 through Meta+9 (TerminalWindow.qml:105-170) and guards each
+on the tab count; these are Cmd-1 through Cmd-9, which is what the same keys are
+called here."
+  `(define-action ,selector (session)
+     (when session
+       (select-window-tab (session-window session) ,index))))
+
+(define-tab-action "crtSelectTab1:" 0)
+(define-tab-action "crtSelectTab2:" 1)
+(define-tab-action "crtSelectTab3:" 2)
+(define-tab-action "crtSelectTab4:" 3)
+(define-tab-action "crtSelectTab5:" 4)
+(define-tab-action "crtSelectTab6:" 5)
+(define-tab-action "crtSelectTab7:" 6)
+(define-tab-action "crtSelectTab8:" 7)
+(define-tab-action "crtSelectTab9:" 8)
+
 (define-action "crtCloseWindow:" (session)
   (when session
     (objc:invoke (crt-window-handle (session-window session))

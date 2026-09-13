@@ -546,3 +546,54 @@ window and by the profile table itself")
                               (crt.ui:session-terminal session)))
                      "an effects slider must not resize the terminal"))))
         (crt.ui:end-session session)))))
+
+(test tabs-are-the-system-s-own
+  "New Tab puts a second terminal in the key window's tab group.
+
+Upstream draws its own tab bar in QML because Qt has nothing else to offer.  Here
+each tab is a real NSWindow in an NSWindowTabGroup, which is why nothing below
+CRT.UI has to know tabs exist -- every tab keeps its own view, layer and display
+link, and a session cannot tell the difference.  What that buys, and what would
+otherwise have to be built: the tab bar, the overview, dragging a tab out into a
+window, and Cmd-Shift-bracket.
+
+The assertion that matters is that the two sessions are INDEPENDENT terminals
+sharing a window, not one terminal drawn twice."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let ((first (crt.ui:make-session :width 480 :height 320
+                                      :profile "Monochrome Green"
+                                      :command '("/bin/sh" "-c" "sleep 30")))
+          (second nil))
+      (unwind-protect
+           (progn
+             (is (= 1 (length (crt.ui:window-tabs (crt.ui:session-window first))))
+                 "one window is a tab group of one")
+             (setf second (crt.ui:make-session
+                           :width 480 :height 320 :tab-of first
+                           :profile (crt.settings:profile-name
+                                     (crt.ui:session-profile first))
+                           :command '("/bin/sh" "-c" "sleep 30")))
+             (let ((tabs (crt.ui:window-tabs (crt.ui:session-window first))))
+               (is (= 2 (length tabs)) "and two make a group of two, got ~D"
+                   (length tabs)))
+             (is (string= "Monochrome Green"
+                          (crt.settings:profile-name (crt.ui:session-profile second)))
+                 "a new tab inherits the profile, or a window of tabs would look
+like several terminals rather than one")
+             (is (not (eq (crt.ui:session-terminal first)
+                          (crt.ui:session-terminal second)))
+                 "the two tabs must be separate terminals")
+             (is (not (eq (crt.ui:session-view first) (crt.ui:session-view second)))
+                 "with separate views, so each has its own layer and clock")
+             ;; Cmd-1 and Cmd-2 pick them out.
+             (is-true (crt.ui:select-window-tab (crt.ui:session-window first) 0)
+                      "Cmd-1 selects the first tab")
+             (is-true (crt.ui:select-window-tab (crt.ui:session-window first) 1)
+                      "Cmd-2 the second")
+             (is-false (crt.ui:select-window-tab (crt.ui:session-window first) 8)
+                       "and Cmd-9 does nothing when there is no ninth, rather
+than erroring"))
+        (when second (crt.ui:end-session second))
+        (crt.ui:end-session first)))))
