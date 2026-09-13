@@ -616,3 +616,68 @@ like several terminals rather than one")
 than erroring"))
         (when second (crt.ui:end-session second))
         (crt.ui:end-session first)))))
+
+(test the-settings-form-fills-its-scroller-from-the-top
+  "The layout bug that was visible and that no assertion could see.
+
+AppKit's origin is bottom left, and an NSScrollView whose document view is
+SHORTER than the clip view pins it to the bottom.  So a tab with eight rows in a
+four-hundred-point scroller drew them in the lower half under a band of empty
+grey, which reads as a rendering fault rather than a layout one.  The suite was
+green throughout: every control existed, every handler worked, and the thing was
+simply in the wrong place.
+
+Three invariants, each of which was false before:
+
+  the form is FLIPPED, so row 0 is at the top and y grows downward
+  the form is at least as tall as the scroller, so nothing is bottom-pinned
+  the form is no WIDER than the scroller, so nothing needs a horizontal scroller
+
+The last one was off by four points, from deriving the tab's content rect by
+subtracting a guess at the chrome instead of asking for it."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let ((session (crt.ui:make-session :width 480 :height 320
+                                        :command '("/bin/sh" "-c" "sleep 30"))))
+      (unwind-protect
+           (let* ((window (crt.ui:show-settings-window))
+                  (tabs (crt.ui:settings-window-tabs window))
+                  (count (objc:invoke-into 'integer tabs "numberOfTabViewItems")))
+             (is (= 4 count) "four tabs")
+             (dotimes (i count)
+               (let* ((item (objc:invoke tabs "tabViewItemAtIndex:" i))
+                      (label (objc:invoke-into 'string item "label"))
+                      (scroll (objc:invoke item "view"))
+                      (form (objc:invoke scroll "documentView"))
+                      (sf (objc:invoke-into (vector 0d0 0d0 0d0 0d0) scroll "frame"))
+                      (ff (objc:invoke-into (vector 0d0 0d0 0d0 0d0) form "frame")))
+                 (is-true (objc:invoke-bool form "isFlipped")
+                          "~A: the form must be flipped, or its rows start at the
+bottom of the scroller" label)
+                 (is (>= (aref ff 3) (aref sf 3))
+                     "~A: form is ~,0F tall in a ~,0F scroller, so AppKit will pin
+it to the bottom" label (aref ff 3) (aref sf 3))
+                 (is (<= (aref ff 2) (aref sf 2))
+                     "~A: form is ~,0F wide in a ~,0F scroller, so it needs a
+horizontal scroller it should not have" label (aref ff 2) (aref sf 2))))
+             ;; And the buttons really are side by side rather than a stack of
+             ;; full-width ones, which is what they were.
+             (let ((buttons (tab-controls window "General" "NSButton")))
+               (is (= 3 (length buttons)) "Save, Export, Import")
+               (let ((ys (mapcar (lambda (b)
+                                   (aref (objc:invoke-into (vector 0d0 0d0 0d0 0d0)
+                                                           b "frame")
+                                         1))
+                                 buttons)))
+                 (is (every (lambda (y) (= y (first ys))) ys)
+                     "all three must share one row, got ys ~S" ys))
+               (is (every (lambda (b)
+                            (< (aref (objc:invoke-into (vector 0d0 0d0 0d0 0d0)
+                                                       b "frame")
+                                     2)
+                               200))
+                          buttons)
+                   "each must be the width of its title, not the width of the
+window")))
+        (crt.ui:end-session session)))))

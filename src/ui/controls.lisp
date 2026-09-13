@@ -157,10 +157,40 @@ the colour panel hands back whatever space the user picked in."
                          (objc:invoke-into 'double-float srgb "blueComponent"))))))
 
 ;;; Laying them out ------------------------------------------------------------
+;;;
+;;; A FLIPPED view, and that is the fix for the thing that was actually wrong.
+;;; AppKit's origin is bottom left, and an NSScrollView whose document view is
+;;; shorter than the clip view pins it to the BOTTOM -- so a tab with eight rows
+;;; in a four-hundred-pixel scroller drew them in the lower half with a band of
+;;; empty grey above, which looks like a rendering fault rather than a layout
+;;; one.  Measured before believing it: the Effects form came out 340 tall in a
+;;; 400 tall scroller, and the first screenshot showed the sliders sitting at
+;;; the bottom.
+;;;
+;;; Flipping it puts the origin at the top left, which is where a form starts,
+;;; and the arithmetic below reads downward like the form does.
 
-(defconstant +row-height+ 28)
-(defconstant +form-margin+ 16)
-(defconstant +label-width+ 130)
+(objc:define-objc-class form-view ()
+  ()
+  (:objc-class-name "CathodeRayTubeFormView")
+  (:objc-superclass-name "NSView"))
+
+(objc:define-objc-method ("isFlipped" objc:objc-bool) ((self form-view))
+  t)
+
+;;; The metrics, in one place.  Loosely macOS's own: a 22-point control on a
+;;; 30-point pitch leaves eight points of air, which is what stops a column of
+;;; sliders reading as a wall.
+(defconstant +row-height+ 30 "Baseline to baseline for an ordinary row.")
+(defconstant +control-height+ 22)
+(defconstant +label-height+ 18)
+(defconstant +form-margin+ 20)
+(defconstant +label-width+ 140 "The right-aligned label column.")
+(defconstant +gutter+ 12 "Between the label column and its control.")
+(defconstant +readout-width+ 52 "The value shown beside a slider.")
+(defconstant +section-lead+ 18 "Air ABOVE a section heading.")
+(defconstant +section-trail+ 8 "And below it, before its first row.")
+(defconstant +group-gap+ 10 "Between buttons sharing a row.")
 
 (defun set-frame (view x y width height)
   (objc:invoke (objc:objc-object-pointer view) "setFrame:"
@@ -173,32 +203,91 @@ the colour panel hands back whatever space the user picked in."
                (objc:objc-object-pointer child))
   child)
 
-(defun make-form (width rows)
-  "A view holding ROWS, each (LABEL-OR-NIL CONTROL &optional TRAILING).
+(defun make-section-label (text)
+  "A heading.  Small, bold, and the only thing in this window that is either."
+  (let ((label (make-label text)))
+    (objc:invoke label "setFont:"
+                 (objc:invoke "NSFont" "boldSystemFontOfSize:" 11d0))
+    (objc:invoke label "setTextColor:" (objc:invoke "NSColor" "secondaryLabelColor"))
+    label))
 
-Laid out by hand, top down, in fixed rows.  Auto Layout would mean building
-NSLayoutConstraint objects three at a time through a message-send bridge to
-arrange a form whose shape is known in advance and never changes; hand-placed
-frames are shorter, and the flipped-coordinate arithmetic is in one place."
-  (let* ((height (+ (* +row-height+ (length rows)) (* 2 +form-margin+)))
-         (view (objc:invoke (objc:invoke "NSView" "alloc") "initWithFrame:"
-                            (vector 0d0 0d0 (float width 1d0) (float height 1d0)))))
-    (loop for row in rows
-          for index from 0
-          ;; AppKit's origin is BOTTOM left, so the first row is the highest y.
-          for y = (- height +form-margin+ (* +row-height+ (1+ index)))
-          do (destructuring-bind (label control &optional trailing) row
-               (when label
-                 (add-subview view (set-frame (make-label label :alignment :right)
-                                              +form-margin+ (+ y 4)
-                                              +label-width+ 18)))
-               (let* ((x (if label (+ +form-margin+ +label-width+ 8) +form-margin+))
-                      (right (- width +form-margin+))
-                      (trailing-width (if trailing 56 0))
-                      (control-width (- right x trailing-width (if trailing 8 0))))
-                 (add-subview view (set-frame control x (+ y 2)
-                                              (max 40 control-width) 22))
-                 (when trailing
-                   (add-subview view (set-frame trailing (- right trailing-width)
-                                                (+ y 4) trailing-width 18))))))
+(defun row-height-of (row &key first)
+  "How much vertical space ROW needs, heading and gap rows included.
+
+FIRST suppresses a heading's lead-in.  The form margin is already above it, and
+a heading that adds its own air on top of that sits too far from the top edge to
+look deliberate."
+  (case (first row)
+    (:section (+ (if first 0 +section-lead+) +label-height+ +section-trail+))
+    (:gap (floor +row-height+ 2))
+    (t +row-height+)))
+
+(defun lay-out-row (view row width y)
+  "Place ROW's controls at Y.  Returns nothing; the caller advances."
+  (let ((right (- width +form-margin+)))
+    (case (first row)
+      (:section
+       (add-subview view (set-frame (make-section-label (second row))
+                                    +form-margin+ y
+                                    (- right +form-margin+) +label-height+)))
+      (:gap)
+      (:group
+       ;; Buttons side by side, each as wide as it needs to be.  They used to be
+       ;; one per row at the full width of the window, which is how a Save
+       ;; button ends up four hundred and sixty points wide.
+       (let ((x +form-margin+))
+         (dolist (control (rest row))
+           (objc:invoke (objc:objc-object-pointer control) "sizeToFit")
+           (let* ((frame (objc:invoke-into (vector 0d0 0d0 0d0 0d0) control "frame"))
+                  (w (max 84 (+ 20 (aref frame 2)))))
+             (add-subview view (set-frame control x y w +control-height+))
+             (incf x (+ w +group-gap+))))))
+      (t
+       (destructuring-bind (label control &optional trailing) row
+         (when label
+           (add-subview view (set-frame (make-label label :alignment :right)
+                                        +form-margin+ (+ y 2)
+                                        +label-width+ +label-height+)))
+         (let* ((x (if label (+ +form-margin+ +label-width+ +gutter+) +form-margin+))
+                (trailing-width (if trailing (+ +readout-width+ +group-gap+) 0))
+                (control-width (max 60 (- right x trailing-width))))
+           (add-subview view (set-frame control x y control-width +control-height+))
+           (when trailing
+             (add-subview view (set-frame trailing (- right +readout-width+) (+ y 2)
+                                          +readout-width+ +label-height+)))))))))
+
+(defun make-form (width rows &key (minimum-height 0))
+  "A view holding ROWS, laid out top down.
+
+A row is (LABEL CONTROL &optional TRAILING), or one of:
+
+  (:section TEXT)        a small bold heading with air around it
+  (:group c1 c2 ...)     controls side by side, each sized to its title
+  (:gap)                  half a row of nothing
+
+MINIMUM-HEIGHT keeps a short form filling its scroller, so that the background
+is uniform whether a tab has six rows or eleven.
+
+Hand-placed rather than Auto Layout: building NSLayoutConstraint objects three
+at a time through a message-send bridge, to arrange a form whose shape is known
+in advance and never changes, is more code than placing frames -- and this way
+the coordinate arithmetic is in one function instead of forty."
+  (let* ((heights (loop for row in rows
+                        for index from 0
+                        collect (row-height-of row :first (zerop index))))
+         (height (max minimum-height
+                      (+ (reduce #'+ heights :initial-value 0) (* 2 +form-margin+))))
+         (view (make-instance 'form-view)))
+    (set-frame view 0 0 width height)
+    (let ((y +form-margin+))
+      (loop for row in rows
+            for step in heights
+            for index from 0
+            do (lay-out-row view row width
+                            ;; A heading's own air is above it, so its label sits
+                            ;; at the BOTTOM of the space the row reserves.
+                            (if (eq (first row) :section)
+                                (+ y (if (zerop index) 0 +section-lead+))
+                                y))
+               (incf y step)))
     view))

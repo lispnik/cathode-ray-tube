@@ -108,7 +108,8 @@ the pipeline specialisation is chosen by testing exactly that."
                                      (format nil "~D%" (round (* 100 value))))
                         (apply-profile-edit session)))
                      readout))))
-      (list (row "Bloom" #'crt.settings:profile-bloom
+      (list* (list :section "Effects")
+            (list (row "Bloom" #'crt.settings:profile-bloom
                  (lambda (v p) (setf (crt.settings:profile-bloom p) v)))
             (row "Burn-in" #'crt.settings:profile-burn-in
                  (lambda (v p) (setf (crt.settings:profile-burn-in p) v)))
@@ -129,7 +130,7 @@ the pipeline specialisation is chosen by testing exactly that."
             (row "RGB shift" #'crt.settings:profile-rgb-shift
                  (lambda (v p) (setf (crt.settings:profile-rgb-shift p) v)))
             (row "Frame shininess" #'crt.settings:profile-frame-shininess
-                 (lambda (v p) (setf (crt.settings:profile-frame-shininess p) v)))))))
+                 (lambda (v p) (setf (crt.settings:profile-frame-shininess p) v))))))))
 
 (defun general-rows (window)
   "SettingsGeneralTab.qml: the profile list, and the five geometry sliders.
@@ -157,7 +158,11 @@ would be porting the workaround instead of the feature."
                         (apply-profile-edit session :font font)))
                      readout))))
       (list*
-       (list "Profile"
+       (list :section "Profile")
+       ;; No row label: the heading immediately above it already says Profile,
+       ;; and a section called Profile whose only row is called Profile reads
+       ;; like a mistake.  The pop-up takes the full width instead.
+       (list nil
              (make-popup names
                          (position (crt.settings:profile-name profile) names
                                    :test #'string=)
@@ -168,15 +173,14 @@ would be porting the workaround instead of the feature."
                              (setf (settings-window-profile window)
                                    (session-profile session))
                              (refresh-settings-window window)))))
-       (list nil (make-push-button
-                  "Save as..."
-                  (lambda () (save-current-profile window))))
-       (list nil (make-push-button
-                  "Export..."
-                  (lambda () (export-current-profile window))))
-       (list nil (make-push-button
-                  "Import..."
-                  (lambda () (import-profile window))))
+       ;; One row, three buttons, each the width of its own title.  They were a
+       ;; row each at the full width of the window before, which is how a Save
+       ;; button ends up four hundred and sixty points wide.
+       (list :group
+             (make-push-button "Save as..." (lambda () (save-current-profile window)))
+             (make-push-button "Export..." (lambda () (export-current-profile window)))
+             (make-push-button "Import..." (lambda () (import-profile window))))
+       (list :section "Screen")
        (list (row "Brightness" #'crt.settings:profile-brightness
                   (lambda (v p) (setf (crt.settings:profile-brightness p) v)))
              (row "Contrast" #'crt.settings:profile-contrast
@@ -215,6 +219,7 @@ would be porting the workaround instead of the feature."
                       (funcall writer hex (editable-profile session))
                       (apply-profile-edit session))))))
       (list
+       (list :section "Font")
        (list "Source"
              (make-popup '("Bundled" "System") source
                          (lambda (index name)
@@ -298,6 +303,7 @@ would be porting the workaround instead of the feature."
                                            (format nil "~,2F" value))
                               (apply-profile-edit session :font t)))
                readout))
+       (list :section "Colour")
        (colour "Font colour" #'crt.settings:profile-font-color
                (lambda (v p) (setf (crt.settings:profile-font-color p) v)))
        (colour "Background" #'crt.settings:profile-background-color
@@ -351,6 +357,7 @@ it is already in the View menu where this platform puts it."
                                     (crt.settings:save-settings)))
                      readout))))
       (list
+       (list :section "Shell")
        (list nil (make-checkbox
                   "Use a custom command instead of a shell"
                   (crt.settings:settings-use-custom-command settings)
@@ -363,6 +370,7 @@ it is already in the View menu where this platform puts it."
                                 (setf (crt.settings:settings-custom-command settings)
                                       text)
                                 (crt.settings:save-settings))))
+       (list :section "Terminal")
        (list nil (make-checkbox
                   "Blinking cursor"
                   (crt.settings:profile-blinking-cursor
@@ -379,6 +387,7 @@ it is already in the View menu where this platform puts it."
                     (setf (crt.settings:settings-show-terminal-size settings) on)
                     (apply-overlay-setting)
                     (crt.settings:save-settings))))
+       (list :section "Quality")
        ;; Upstream calls this "Effects FPS" and shows 100/N as a percentage, so
        ;; the slider runs over the SKIP and the readout over the rate.  Keeping
        ;; the skip as the quantity means the label says what the number is.
@@ -433,8 +442,10 @@ either."
 
 ;;; The window ------------------------------------------------------------------
 
-(defconstant +settings-width+ 520)
-(defconstant +settings-height+ 460)
+(defconstant +settings-width+ 560)
+(defconstant +settings-height+ 520)
+(defconstant +tab-inset+ 8
+  "Breathing room between the scroller and the tab's own content rect.")
 
 (defun font-display-name (profile)
   "What the Name pop-up should have selected for PROFILE."
@@ -444,25 +455,38 @@ either."
                    (crt.settings:profile-font-name profile))))
         (if face (crt.text:font-display-name-for face) ""))))
 
-(defun make-scrolling-tab (title rows)
+(defun make-scrolling-tab (title rows width height)
   "One tab of the settings window, scrolling if its rows do not fit.
 
 Scrolling because the Effects tab is eleven sliders and the window is a fixed
 size: a tab that simply clipped its last two controls would look like the port
-had stopped halfway."
-  (let* ((form (make-form (- +settings-width+ 24) rows))
-         (frame (objc:invoke form "frame"))
-         (content-height (aref frame 3))
+had stopped halfway.
+
+WIDTH and HEIGHT are the tab view's OWN content rect, measured and passed in
+rather than derived from the window size by subtracting a guess at the chrome.
+The guess was wrong by four points, which is enough to put a horizontal
+scroller under a form that fits.
+
+MINIMUM-HEIGHT makes a short form fill the scroller.  Without it the document
+view is shorter than the clip view, and AppKit pins a short document to the
+BOTTOM -- which drew eight rows in the lower half of the tab under a band of
+empty grey.  The flipped form view decides where the rows start; this decides
+what is behind them."
+  (let* ((form (make-form width rows :minimum-height height))
          (scroll (objc:invoke (objc:invoke "NSScrollView" "alloc")
                               "initWithFrame:"
-                              (vector 0d0 0d0
-                                      (float (- +settings-width+ 8) 1d0)
-                                      (float (- +settings-height+ 60) 1d0))))
+                              (vector 0d0 0d0 (float width 1d0) (float height 1d0))))
          (item (objc:invoke (objc:invoke "NSTabViewItem" "alloc")
                             "initWithIdentifier:" title)))
-    (declare (ignorable content-height))
     (objc:invoke scroll "setHasVerticalScroller:" t)
     (objc:invoke scroll "setDrawsBackground:" nil)
+    (objc:invoke scroll "setAutohidesScrollers:" t)
+    (objc:invoke scroll "setBorderType:" 0)          ; NSNoBorder
+    ;; NSViewWidthSizable | NSViewHeightSizable, so the scroller follows the tab
+    ;; view.  Its frame used to be a guess, and the guess was VISIBLE: NSTabView
+    ;; resizes only the selected tab's view, so the three not showing kept what
+    ;; they were built with and jumped on first selection.
+    (objc:invoke scroll "setAutoresizingMask:" (logior 2 16))
     (objc:invoke scroll "setDocumentView:" (objc:objc-object-pointer form))
     (objc:invoke item "setLabel:" title)
     (objc:invoke item "setView:" (objc:objc-object-pointer scroll))
@@ -505,13 +529,18 @@ nothing to rebuild, and it happens when a person clicks a pop-up."
           do (objc:invoke tabs "removeTabViewItem:"
                           (objc:invoke tabs "tabViewItemAtIndex:" 0)))
     (when (settings-window-session window)
-      (dolist (tab (list (cons "General" (general-rows window))
-                         (cons "Terminal" (terminal-rows window))
-                         (cons "Effects" (effects-rows window))
-                         (cons "Advanced" (advanced-rows window))))
-        (objc:invoke tabs "addTabViewItem:"
-                     (objc:objc-object-pointer
-                      (make-scrolling-tab (car tab) (cdr tab))))))))
+      ;; ASK the tab view how much room a tab actually gets, rather than
+      ;; subtracting a guess at the strip and the margins from the window size.
+      (let* ((content (objc:invoke-into (vector 0d0 0d0 0d0 0d0) tabs "contentRect"))
+             (width (max 200 (- (floor (aref content 2)) (* 2 +tab-inset+))))
+             (height (max 200 (floor (aref content 3)))))
+        (dolist (tab (list (cons "General" (general-rows window))
+                           (cons "Terminal" (terminal-rows window))
+                           (cons "Effects" (effects-rows window))
+                           (cons "Advanced" (advanced-rows window))))
+          (objc:invoke tabs "addTabViewItem:"
+                       (objc:objc-object-pointer
+                        (make-scrolling-tab (car tab) (cdr tab) width height))))))))
 
 (defun refresh-settings-window (window)
   (setf (settings-window-profile window)
