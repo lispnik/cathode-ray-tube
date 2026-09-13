@@ -11,7 +11,12 @@ application replaced by Cocoa driven from Lisp through the
 [`objc`](https://github.com/lispnik/objc) bindings, and the terminal emulation
 supplied by a vendored [libvterm](https://www.leonerd.org.uk/code/libvterm/).
 
-**Status: early.** M0 is done — see below. There is no application yet.
+**Status: it is a terminal.** `make run` opens a window, runs your shell, and
+draws it with a CoreText glyph atlas at vsync — colour, bold, underline, reverse
+video, wide characters, scrollback and resize all work. The CRT effects are the
+next milestone; today it renders plain white-on-black.
+
+`make test` is 181 checks.
 
 ## Building
 
@@ -20,6 +25,8 @@ Needs a Mac with the Command Line Tools (for `cc`), SBCL, and
 
 ```sh
 make deps     # build vendor/lib/libcathode.dylib, restore the Lisp dependencies
+make run      # open a terminal
+make test     # 181 checks
 make probe    # prove this machine can do what the design assumes
 ```
 

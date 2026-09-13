@@ -59,4 +59,9 @@ emit filter-nearest             MTLSamplerMinMagFilterNearest MTLSampler.h
 emit filter-linear              MTLSamplerMinMagFilterLinear  MTLSampler.h
 emit address-clamp-to-edge      MTLSamplerAddressModeClampToEdge MTLSampler.h
 emit address-repeat             MTLSamplerAddressModeRepeat      MTLSampler.h
+emit blend-factor-one           MTLBlendFactorOne                MTLRenderPipeline.h
+emit blend-factor-zero          MTLBlendFactorZero               MTLRenderPipeline.h
+emit blend-factor-src-alpha     MTLBlendFactorSourceAlpha        MTLRenderPipeline.h
+emit blend-factor-one-minus-src-alpha MTLBlendFactorOneMinusSourceAlpha MTLRenderPipeline.h
+emit blend-operation-add        MTLBlendOperationAdd             MTLRenderPipeline.h
 echo ")"

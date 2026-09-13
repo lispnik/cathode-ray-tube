@@ -100,6 +100,33 @@ wants and exactly what a frame does not."
     (list (aref pixels i) (aref pixels (+ i 1))
           (aref pixels (+ i 2)) (aref pixels (+ i 3)))))
 
+(defstruct (buffer (:constructor %make-buffer (handle contents length)))
+  "An MTLBuffer and the pointer to write into it.
+
+Shared storage, so CONTENTS is memory both the CPU and the GPU can see and the
+instance data is built IN PLACE -- no staging array, no copy per frame.  On
+Apple silicon there is one pool of memory and this is simply where it is."
+  handle contents (length 0 :type fixnum))
+
+(defun make-buffer (length &key label)
+  (let ((device (or (default-device) (error "No Metal device on this machine."))))
+    (with-metal
+      (let ((handle (objc:invoke device "newBufferWithLength:options:"
+                                 (max 1 length) +storage-mode-shared+)))
+        (when (null-object-p handle)
+          (error "Metal refused a ~D-byte buffer." length))
+        (when label (objc:invoke handle "setLabel:" label))
+        (%make-buffer handle (objc:invoke handle "contents") (max 1 length))))))
+
+(defun release-buffer (buffer)
+  (when (and buffer (buffer-handle buffer))
+    (objc:release (buffer-handle buffer))
+    (setf (buffer-handle buffer) nil (buffer-contents buffer) nil)))
+
+(defun bind-vertex-buffer (encoder buffer index &key (offset 0))
+  (objc:invoke encoder "setVertexBuffer:offset:atIndex:"
+               (if (buffer-p buffer) (buffer-handle buffer) buffer) offset index))
+
 (defun make-sampler (&key (min +filter-linear+) (mag +filter-linear+)
                           (address +address-clamp-to-edge+) label)
   "A sampler state.

@@ -23,6 +23,7 @@
                     (#:vt #:cathode-ray-tube.vt)
                     (#:pty #:cathode-ray-tube.pty)
                     (#:term #:cathode-ray-tube.terminal)
+                    (#:text #:cathode-ray-tube.text)
                     (#:ui #:cathode-ray-tube.ui))
   (:export #:run-tests #:all))
 
@@ -36,6 +37,7 @@
 (def-suite pty :in all :description "Real child processes on real ptys.")
 (def-suite terminal :in all :description "A pty and a screen, end to end.")
 (def-suite metal :in all :description "Metal. Skips without a GPU.")
+(def-suite text :in all :description "Glyphs. Skips without a GPU.")
 (def-suite ui :in all :description "Windows. Skips without a window server.")
 
 (defun gpu-or-skip ()

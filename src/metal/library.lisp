@@ -118,7 +118,23 @@ CONSTANTS is a plist of function-constant index to value:
                                                  "objectAtIndexedSubscript:" 0)))
                     (objc:invoke attachment "setPixelFormat:" pixel-format)
                     (when blending
-                      (objc:invoke attachment "setBlendingEnabled:" t)))
+                      ;; Straight-alpha source over destination.  The text pass
+                      ;; needs it: backgrounds are opaque quads and glyph
+                      ;; coverage composites over them in the same draw, which
+                      ;; is what lets the whole pass be one pipeline.
+                      (objc:invoke attachment "setBlendingEnabled:" t)
+                      (objc:invoke attachment "setRgbBlendOperation:"
+                                   +blend-operation-add+)
+                      (objc:invoke attachment "setAlphaBlendOperation:"
+                                   +blend-operation-add+)
+                      (objc:invoke attachment "setSourceRGBBlendFactor:"
+                                   +blend-factor-src-alpha+)
+                      (objc:invoke attachment "setSourceAlphaBlendFactor:"
+                                   +blend-factor-one+)
+                      (objc:invoke attachment "setDestinationRGBBlendFactor:"
+                                   +blend-factor-one-minus-src-alpha+)
+                      (objc:invoke attachment "setDestinationAlphaBlendFactor:"
+                                   +blend-factor-one-minus-src-alpha+)))
                   (cffi:with-foreign-object (error-out :pointer)
                     (setf (cffi:mem-ref error-out :pointer) (cffi:null-pointer))
                     (let ((state (objc:invoke

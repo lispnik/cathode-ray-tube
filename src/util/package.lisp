@@ -34,6 +34,8 @@
    #:texture-pixel-format #:make-texture #:release-texture
    #:texture-bytes #:texture-pixel #:bytes-per-pixel
    #:make-sampler #:with-mtl-region
+   #:buffer #:buffer-p #:buffer-handle #:buffer-contents #:buffer-length
+   #:make-buffer #:release-buffer #:bind-vertex-buffer
    ;; library and pipelines
    #:default-library #:compile-library #:make-function
    #:pipeline #:clear-pipeline-cache
@@ -55,7 +57,10 @@
    #:+primitive-triangle+ #:+primitive-triangle-strip+
    #:+data-type-float+ #:+data-type-int+ #:+data-type-bool+
    #:+filter-nearest+ #:+filter-linear+
-   #:+address-clamp-to-edge+ #:+address-repeat+))
+   #:+address-clamp-to-edge+ #:+address-repeat+
+   #:+blend-factor-one+ #:+blend-factor-zero+
+   #:+blend-factor-src-alpha+ #:+blend-factor-one-minus-src-alpha+
+   #:+blend-operation-add+))
 
 (defpackage #:cathode-ray-tube.vt
   (:use #:cl)
@@ -107,10 +112,33 @@
    #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
    #:terminal-send #:terminal-send-string
    #:with-terminal-locked #:terminal-take-dirty #:terminal-title
-   #:terminal-snapshot #:snapshot #:snapshot-p
+   #:terminal-snapshot #:snapshot #:snapshot-p #:make-snapshot
    #:snapshot-rows #:snapshot-cols #:snapshot-cells #:snapshot-dirty
    #:snapshot-cursor-row #:snapshot-cursor-col #:snapshot-cursor-visible
    #:snapshot-painted))
+
+(defpackage #:cathode-ray-tube.text
+  (:use #:cl)
+  (:nicknames #:crt.text)
+  (:local-nicknames (#:util #:cathode-ray-tube.util)
+                    (#:metal #:cathode-ray-tube.metal)
+                    (#:vt #:cathode-ray-tube.vt)
+                    (#:term #:cathode-ray-tube.terminal))
+  (:export
+   ;; fonts
+   #:font #:font-p #:font-handle #:font-pixel-size #:font-ascent #:font-descent
+   #:font-cell-width #:font-cell-height #:font-advance
+   #:load-font #:release-font #:bundled-font-path #:+bundled-fonts+
+   ;; the atlas
+   #:atlas #:atlas-p #:make-atlas #:release-atlas #:atlas-texture
+   #:atlas-width #:atlas-height #:atlas-glyph #:glyph
+   #:glyph-u0 #:glyph-v0 #:glyph-u1 #:glyph-v1
+   #:glyph-width #:glyph-height #:glyph-bearing-x #:glyph-bearing-y
+   #:glyph-advance #:atlas-flush
+   ;; the pass
+   #:text-renderer #:make-text-renderer #:release-text-renderer
+   #:text-renderer-atlas #:text-renderer-font #:text-renderer-target
+   #:render-text #:text-grid-size #:resize-text-renderer))
 
 (defpackage #:cathode-ray-tube.ui
   (:use #:cl)
@@ -123,7 +151,12 @@
    #:attach-metal-layer #:start-display-link #:stop-display-link #:step-frame
    #:crt-window #:crt-window-p #:crt-window-handle #:crt-window-view
    #:make-crt-window #:show-crt-window #:close-crt-window #:*windows*
-   #:make-menu-bar #:gradient-frame))
+   #:make-menu-bar #:gradient-frame
+   #:view-resized-p #:view-key-handler #:event-key-string
+   #:on-main-thread #:drain-main-thread-queue
+   #:session #:session-p #:make-session #:end-session #:run-terminal
+   #:session-window #:session-view #:session-terminal #:session-renderer
+   #:*sessions* #:*default-font*))
 
 (defpackage #:cathode-ray-tube
   (:use #:cl)

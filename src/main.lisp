@@ -11,7 +11,7 @@ a window on the wrong thread is not an error but a hang.  When we already ARE
 the main thread this costs nothing."
   (handler-case
       (tmt:with-body-in-main-thread (:blocking t)
-        (crt.ui:run))
+        (crt.ui:run-terminal))
     (error (condition)
       (format *error-output* "~&cathode-ray-tube: ~A~%" condition)
       (finish-output *error-output*)

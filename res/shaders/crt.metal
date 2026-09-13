@@ -104,3 +104,102 @@ fragment float4 gradient_fragment(Varyings in [[stage_in]],
     float3 colour = float3(in.uv, 0.5 + 0.5 * sin(u.time));
     return float4(colour, 1.0);
 }
+
+// ---------------------------------------------------------------------------
+// The text pass.
+//
+//  One instanced draw covers the whole screen: a quad per cell background and a
+//  quad per glyph, in that order, with straight-alpha blending so the glyphs
+//  composite over the backgrounds.  Both sample the SAME atlas -- backgrounds
+//  read a 2x2 solid block reserved at its origin -- so there is one pipeline,
+//  one texture binding and one draw call for the entire terminal.
+//
+//  The output of this pass is the texture every effect in the chain consumes.
+//  Two things about it are load-bearing and easy to lose:
+//
+//    It is cleared to (0,0,0,0) and the PROFILE BACKGROUND IS NOT PAINTED HERE.
+//    terminal_dynamic.frag's convertWithChroma computes
+//    mix(backgroundColor, foregroundColor, rgb2grey(inColor)) -- the background
+//    is applied in the DYNAMIC pass.  Painting it here too would apply it twice
+//    and break every one of the fourteen profiles.
+//
+//    Alpha is a MASK.  Cells inside the content rectangle write alpha 1 and the
+//    margin ring stays 0, because the static pass uses the BLURRED alpha as its
+//    bloom mask and its frame-reflection mask.  Losing it is silent and shows up
+//    as "bloom looks wrong".
+// ---------------------------------------------------------------------------
+
+struct CellInstance {
+    float4 color;     // straight alpha
+    float2 origin;    // top-left, in texture pixels
+    float2 size;      // in texture pixels
+    float2 uv0;
+    float2 uv1;
+};
+
+struct TextUniforms {
+    float2 target_size;   // the text target, in pixels
+};
+
+struct TextVaryings {
+    float4 position [[position]];
+    float2 uv;
+    float4 color;
+};
+
+vertex TextVaryings text_vertex(uint vid [[vertex_id]],
+                                uint iid [[instance_id]],
+                                const device CellInstance *cells [[buffer(0)]],
+                                constant TextUniforms &u [[buffer(1)]])
+{
+    CellInstance cell = cells[iid];
+    float2 corner = float2(float(vid & 1u), float(vid >> 1u));
+
+    float2 pixel = cell.origin + corner * cell.size;
+    // Pixels to clip space.  Y is flipped because the cell grid counts rows
+    // DOWNWARD from the top, the way a terminal does, while clip space counts
+    // upward.
+    float2 ndc = float2((pixel.x / u.target_size.x) * 2.0 - 1.0,
+                        1.0 - (pixel.y / u.target_size.y) * 2.0);
+
+    TextVaryings out;
+    out.position = float4(ndc, 0.0, 1.0);
+    out.uv = mix(cell.uv0, cell.uv1, corner);
+    out.color = cell.color;
+    return out;
+}
+
+fragment float4 text_fragment(TextVaryings in [[stage_in]],
+                              texture2d<float> atlas [[texture(0)]],
+                              sampler atlas_sampler [[sampler(0)]])
+{
+    // The atlas is R8Unorm coverage, so only .r carries anything.
+    float coverage = atlas.sample(atlas_sampler, in.uv).r;
+    float alpha = in.color.a * coverage;
+    // Premultiplied would be wrong here: the blend state is straight-alpha
+    // source-over, so the colour is handed over unmultiplied and the hardware
+    // does the multiply.
+    return float4(in.color.rgb, alpha);
+}
+
+// ---------------------------------------------------------------------------
+// Blit.
+//
+//  Copies a texture to the target, one to one.  It is what the window draws
+//  until the effect chain lands in M3, and it stays afterwards as the honest
+//  "effects off" path -- so it is not scaffolding.
+// ---------------------------------------------------------------------------
+
+fragment float4 blit_fragment(Varyings in [[stage_in]],
+                              texture2d<float> source [[texture(0)]],
+                              sampler source_sampler [[sampler(0)]])
+{
+    // The quad's uv.y runs bottom-to-top and the text target is stored
+    // top-down, so the sample is flipped.  Getting this wrong renders the
+    // terminal upside down, which is at least an unambiguous symptom.
+    float2 uv = float2(in.uv.x, 1.0 - in.uv.y);
+    float4 texel = source.sample(source_sampler, uv);
+    // The text target's alpha is a MASK for the effect chain, not transparency:
+    // the window is opaque, so it is dropped here.
+    return float4(texel.rgb, 1.0);
+}

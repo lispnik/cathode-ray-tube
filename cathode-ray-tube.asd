@@ -59,12 +59,20 @@ and terminal emulation by a vendored libvterm."
                    (:file "resources")
                    (:file "library")
                    (:file "pass")))
+     (:module "text"
+      :serial t
+      :components ((:file "font")
+                   (:file "atlas")
+                   (:file "pass")))
      (:module "ui"
       :serial t
       :components ((:file "frameworks")
+                   (:file "main-thread")
+                   (:file "keyboard")
                    (:file "view")
                    (:file "window")
-                   (:file "app")))
+                   (:file "app")
+                   (:file "session")))
      (:file "main")))))
 
 (asdf:defsystem #:cathode-ray-tube/tests
@@ -81,6 +89,7 @@ and terminal emulation by a vendored libvterm."
                  (:file "pty-tests")
                  (:file "terminal-tests")
                  (:file "metal-tests")
+                 (:file "text-tests")
                  (:file "ui-tests"))))
   ;; FIVEAM:RUN! prints failures and returns NIL, and ASDF discards what a
   ;; TEST-OP returns -- which is exactly how a suite goes green with failing

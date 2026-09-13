@@ -38,7 +38,14 @@
    (effect-time :initform 0d0 :accessor view-effect-time)
    (frames     :initform 0   :accessor view-frames)
    (drawable-size :initform '(0 0) :accessor view-drawable-size)
-   (draw-function :initform nil :accessor view-draw-function))
+   (draw-function :initform nil :accessor view-draw-function)
+   ;; Set when the view changes size, acted on at the top of the next frame.
+   ;; Doing the work here would reallocate the render target, the cell grid and
+   ;; the instance buffer once per mouse-move event while a window edge is being
+   ;; dragged; doing it once per frame is the same result and a fraction of the
+   ;; work.
+   (resized :initform nil :accessor view-resized-p)
+   (key-handler :initform nil :accessor view-key-handler))
   (:objc-class-name "CathodeRayTubeView")
   (:objc-superclass-name "NSView"))
 
@@ -65,7 +72,24 @@
     ((self crt-view) (size cocoa:ns-size))
   (handling-errors ("setFrameSize:")
     (objc:invoke (objc:current-super) "setFrameSize:" size)
-    (update-drawable-size self)))
+    (update-drawable-size self)
+    (setf (view-resized-p self) t)))
+
+(objc:define-objc-method ("keyDown:" :void)
+    ((self crt-view) (event objc:objc-object-pointer))
+  (handling-errors ("keyDown:")
+    (let ((handler (view-key-handler self)))
+      (when handler
+        (let ((bytes (event-key-string event)))
+          (when bytes (funcall handler bytes)))))))
+
+;;; Swallowed, not passed on.  AppKit's default -keyUp: and -flagsChanged: do
+;;; nothing we want, and -doCommandBySelector: would turn a bare Return into
+;;; -insertNewline: and beep at anything it did not recognise.
+(objc:define-objc-method ("keyUp:" :void)
+    ((self crt-view) (event objc:objc-object-pointer))
+  (declare (ignore event))
+  nil)
 
 ;;; The display link's target.  Named with a prefix because a selector is a
 ;;; process-global name and `stepFrame:' is the sort of thing another framework
