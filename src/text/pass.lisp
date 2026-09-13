@@ -51,6 +51,18 @@ the structure's 16-byte alignment is satisfied without padding.")
   ;; rows, and a 15-pixel one gives 2 rather than 1, which is the whole
   ;; difference the two rounding rules make here.
   (line-spacing 0 :type fixnum)
+  ;; fontWidth: how much wider than its natural advance a cell is.
+  ;;
+  ;; Upstream does this by rendering the terminal into a NARROWER texture --
+  ;; PreprocessedTerminal.qml:101, `totalWidth = floor(width / (screenScaling *
+  ;; fontWidth))' -- and then stretching that texture across the full window.
+  ;; So the glyphs are stretched with it, and a wider cell with a horizontally
+  ;; stretched glyph is the same picture arrived at from the other side.
+  ;;
+  ;; Two profiles want it: Commodore 64 and Commodore PET, both at 1.25, and
+  ;; both of them look wrong without it -- the PET's characters are meant to be
+  ;; noticeably wide.  There is no height equivalent; upstream has none either.
+  (font-width 1.0d0 :type double-float)
   (margin 0.0 :type single-float)
   ;; The instance buffer: an MTLBuffer in SHARED storage, written in place.
   ;; Two instances per cell is the worst case -- a background and a glyph --
@@ -64,6 +76,10 @@ the structure's 16-byte alignment is satisfied without padding.")
   (instance-capacity 0 :type fixnum)
   ;; Rows, reused between frames, so a steady terminal allocates nothing.
   (scratch nil))
+
+(defun cell-advance (font font-width)
+  "FONT's horizontal advance for one cell, widened by FONT-WIDTH, in font pixels."
+  (* (max 1d0 (font-cell-width font)) font-width))
 
 (defun line-height (font line-spacing)
   "FONT's cell height plus its leading, in font pixels."
@@ -82,31 +98,39 @@ ratio comes out as exactly the magnification, and smoothstep(2, 4, 2) is zero:
 rasterisation silently never engages, on every profile, at every window size.
 That is what was happening, and a scanline profile that renders no scanlines
 looks like a shader bug rather than an arithmetic one."
-  (let ((scale (text-renderer-scale renderer)))
+  (let ((scale (text-renderer-scale renderer))
+        ;; FONT-WIDTH divides back out here and nowhere else.  It is a STRETCH
+        ;; applied on the way to the screen, so the terminal pixel grid the
+        ;; scanlines count is the un-stretched one -- upstream's `totalWidth' is
+        ;; the width BEFORE the division, which is to say before the stretch.
+        ;; Leaving it in would make a 1.25 profile's scanlines 25% too sparse.
+        (font-width (text-renderer-font-width renderer)))
     (values (/ (* (text-renderer-cols renderer) (text-renderer-cell-width renderer))
-               scale)
+               (* scale font-width))
             (/ (* (text-renderer-rows renderer) (text-renderer-cell-height renderer))
                scale))))
 
 (defun text-grid-size (font width height &key (margin 0.0) (scale 1)
-                                              (line-spacing 0d0))
+                                              (line-spacing 0d0)
+                                              (font-width 1.0d0))
   "How many columns and rows of FONT fit in WIDTH by HEIGHT device pixels."
-  (let ((cw (* scale (max 1d0 (font-cell-width font))))
+  (let ((cw (* scale (cell-advance font font-width)))
         (ch (* scale (line-height font line-spacing))))
     (values (max 1 (floor (- width (* 2 margin)) cw))
             (max 1 (floor (- height (* 2 margin)) ch)))))
 
 (defun grid-pixel-size (font cols rows &key (margin 0.0) (scale 1)
-                                            (line-spacing 0d0))
+                                            (line-spacing 0d0)
+                                            (font-width 1.0d0))
   "The device pixels COLS by ROWS of FONT need.  The inverse of TEXT-GRID-SIZE.
 
 For sizing a window to a grid rather than fitting a grid to a window, which is
 what a terminal defaulting to 80x25 wants."
-  (values (+ (* cols scale (max 1d0 (font-cell-width font))) (* 2 margin))
+  (values (+ (* cols scale (cell-advance font font-width)) (* 2 margin))
           (+ (* rows scale (line-height font line-spacing)) (* 2 margin))))
 
 (defun make-text-renderer (&key font width height (margin 0.0) (scale 1)
-                                (line-spacing 0d0))
+                                (line-spacing 0d0) (font-width 1.0d0))
   (let* ((atlas (make-atlas))
          (renderer (%make-text-renderer
                     :font font
@@ -116,7 +140,8 @@ what a terminal defaulting to 80x25 wants."
                     :line-spacing (util:qround
                                    (* (max 1d0 (font-cell-height font))
                                       line-spacing))
-                    :cell-width (float (* scale (font-cell-width font)) 1.0)
+                    :font-width (float font-width 1d0)
+                    :cell-width (float (* scale (cell-advance font font-width)) 1.0)
                     :cell-height (float (* scale (line-height font line-spacing))
                                         1.0)
                     ;; Nearest, because the low-resolution faces are the point:
@@ -152,7 +177,8 @@ what a terminal defaulting to 80x25 wants."
                       ;; from the construction and shift every glyph by one.
                       :line-spacing (/ (text-renderer-line-spacing renderer)
                                        (max 1d0 (font-cell-height
-                                                 (text-renderer-font renderer)))))
+                                                 (text-renderer-font renderer))))
+                      :font-width (text-renderer-font-width renderer))
     (setf (text-renderer-cols renderer) cols
           (text-renderer-rows renderer) rows)
     (when (text-renderer-target renderer)
@@ -244,6 +270,10 @@ second pass."
          ;; multiplied here.  Missing one puts the glyphs in the right cells at
          ;; the wrong size, which looks like a font problem.
          (ascent (* scale (float (font-ascent font) 1.0)))
+         ;; The horizontal scale a GLYPH is drawn at.  Upstream stretches the
+         ;; whole terminal texture in x by fontWidth, so the glyphs stretch with
+         ;; the cells rather than sitting narrow inside wide ones.
+         (xscale (* scale (float (text-renderer-font-width renderer) 1.0)))
          (rows (min (text-renderer-rows renderer) (term:snapshot-rows snapshot)))
          (cols (min (text-renderer-cols renderer) (term:snapshot-cols snapshot)))
          (cells (term:snapshot-cells snapshot))
@@ -295,10 +325,10 @@ second pass."
                                    (and selected-p (funcall selected-p row col)))
                     (write-instance
                      buffer n fr fg fb 1.0
-                     (+ margin (* col cw) (* scale (glyph-bearing-x glyph)))
+                     (+ margin (* col cw) (* xscale (glyph-bearing-x glyph)))
                      (+ margin (* row ch) ascent
                         (- (* scale (glyph-bearing-y glyph))))
-                     (* scale (glyph-width glyph)) (* scale (glyph-height glyph))
+                     (* xscale (glyph-width glyph)) (* scale (glyph-height glyph))
                      (glyph-u0 glyph) (glyph-v0 glyph)
                      (glyph-u1 glyph) (glyph-v1 glyph))
                     (incf n)))))))))

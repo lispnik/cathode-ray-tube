@@ -101,7 +101,7 @@
    ;; compile on ECL -- see src/settings/json.lisp
    #:read-json #:write-json #:json-error #:json-error-message
    ;; the settings store
-   #:settings #:settings-p #:make-settings #:*settings*
+   #:settings #:settings-p #:make-settings #:copy-settings #:*settings*
    #:settings-profile-name #:settings-effects #:settings-effects-frame-skip
    #:settings-window-scaling #:settings-bloom-quality #:settings-burn-in-quality
    #:settings-font-scaling #:settings-columns #:settings-rows
@@ -196,6 +196,7 @@
    #:render-text #:text-grid-size #:grid-pixel-size #:resize-text-renderer
    #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
    #:text-renderer-cell-width #:text-renderer-cell-height
+   #:text-renderer-font-width #:cell-advance
    #:text-renderer-line-spacing #:line-height #:text-renderer-virtual-size
    #:bundled-font-low-resolution-p #:load-bundled-font
    #:font-for-profile-name #:+profile-font-names+
@@ -209,6 +210,7 @@
                     (#:settings #:cathode-ray-tube.settings))
   (:export
    #:graph #:graph-p #:make-graph #:release-graph #:resize-graph
+   #:set-graph-quality
    #:render-effects #:graph-profile #:graph-quality
    #:graph-window-scaling #:graph-bloom-quality #:graph-burn-in-quality
    #:+k-raster-mode+ #:+k-burn-in+ #:+k-display-frame+ #:+k-chroma+

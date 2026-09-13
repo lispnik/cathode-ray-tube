@@ -456,3 +456,57 @@ in the default one, silently -- so this is what says whether that is happening."
     (is-true (probe-file (crt.text:bundled-font-path (cdr entry)))
         "~S -> ~S is missing its file" (car entry) (cdr entry))))
 
+
+(test font-width-widens-the-cell-but-not-the-virtual-grid
+  "fontWidth at 1.25 -- Commodore 64 and Commodore PET -- must make a cell 25%
+wider on screen while leaving the terminal pixel grid where it was.
+
+Upstream gets this by rendering the terminal into a narrower texture and letting
+the shader stretch it (PreprocessedTerminal.qml:101).  We draw wider cells with
+horizontally stretched glyphs, which is the same picture; what has to survive
+the change of direction is the VIRTUAL size, which is the grid the scanlines are
+counted in.  That grid is upstream's `totalWidth', which is the window width
+DIVIDED by fontWidth (PreprocessedTerminal.qml:33 feeds exactly that to
+virtualResolution) -- so a 1.25 profile's horizontal pixels really are a quarter
+wider and its vertical scanlines really are a quarter further apart.  That is the
+point of the setting on a Commodore, not a side effect: leave the stretch in and
+the grid comes out the same as an ordinary profile's."
+  (when (gpu-or-skip)
+    (let ((font (test-font)))
+      (if (null font)
+          (skip "the bundled fonts are not present")
+          (let ((plain (crt.text:make-text-renderer
+                        :font font :width 800 :height 400 :font-width 1.0d0))
+                (wide (crt.text:make-text-renderer
+                       :font font :width 800 :height 400 :font-width 1.25d0)))
+            (unwind-protect
+                 (progn
+                   (is (< (abs (- (* 1.25 (crt.text:text-renderer-cell-width plain))
+                                  (crt.text:text-renderer-cell-width wide)))
+                          0.01)
+                       "a cell must be 1.25x as wide: ~,2F vs ~,2F"
+                       (crt.text:text-renderer-cell-width plain)
+                       (crt.text:text-renderer-cell-width wide))
+                   (is (= (crt.text:text-renderer-cell-height plain)
+                          (crt.text:text-renderer-cell-height wide))
+                       "and exactly as tall: fontWidth has no height half")
+                   (is (< (crt.text:text-renderer-cols wide)
+                          (crt.text:text-renderer-cols plain))
+                       "so fewer columns fit in the same window")
+                   (multiple-value-bind (plain-vw plain-vh)
+                       (crt.text:text-renderer-virtual-size plain)
+                     (multiple-value-bind (wide-vw wide-vh)
+                         (crt.text:text-renderer-virtual-size wide)
+                       (is (= plain-vh wide-vh) "virtual height is untouched")
+                       ;; Both cover the same run of screen pixels, so the wide
+                       ;; one's grid is narrower by the stretch -- to within the
+                       ;; one cell the floor can differ by.  Equal widths would
+                       ;; mean the stretch had been counted twice.
+                       (is (< (abs (- (/ plain-vw 1.25) wide-vw))
+                              (crt.text:text-renderer-cell-width plain))
+                           "virtual width must be the width BEFORE the stretch: ~
+                            ~,1F/1.25 = ~,1F, got ~,1F"
+                           plain-vw (/ plain-vw 1.25) wide-vw))))
+              (crt.text:release-text-renderer plain)
+              (crt.text:release-text-renderer wide)
+              (crt.text:release-font font)))))))

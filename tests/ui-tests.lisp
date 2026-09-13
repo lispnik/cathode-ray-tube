@@ -25,6 +25,11 @@ runs."
       (when (> (get-internal-real-time) deadline) (return nil))
       (objc.runloop:pump-events :seconds interval :max-seconds interval))))
 
+(defun screen-text (terminal)
+  "TERMINAL's first three rows, safely: empty for a terminal already closed."
+  (crt.terminal:with-terminal-locked (terminal)
+    (crt.vt:vt-text (crt.terminal:terminal-vt terminal) 0 3)))
+
 (defun window-server-or-skip ()
   (cond ((not (objc.runloop:window-server-p))
          (skip "no window server") nil)
@@ -69,7 +74,12 @@ failure this guards against is zero."
         (objc:invoke (crt.ui:crt-window-handle window) "orderOut:" nil)))))
 
 (defun synthesize-key (window view characters &optional (code 0))
-  "Send VIEW a real NSKeyDown, the way AppKit would."
+  "Send VIEW a real NSKeyDown, the way AppKit would.
+
+Returns T when AppKit made an event.  It can decline -- +keyEventWithType: is
+documented to return nil for arguments it does not like -- and a nil event sent
+to -keyDown: is swallowed by the IMP's handler-case, so the keystroke vanishes
+and the only symptom is a terminal that was not typed into.  The caller checks."
   (let ((event (objc:invoke
                 "NSEvent"
                 (concatenate 'string
@@ -83,8 +93,12 @@ failure this guards against is zero."
                 (objc:invoke-into 'integer window "windowNumber")
                 (cffi:null-pointer)
                 characters characters nil code)))
-    (objc:invoke (objc:objc-object-pointer view) "keyDown:"
-                 (objc:objc-object-pointer event))))
+    (cond ((or (null event)
+               (and (cffi:pointerp event) (cffi:null-pointer-p event)))
+           nil)
+          (t (objc:invoke (objc:objc-object-pointer view) "keyDown:"
+                          (objc:objc-object-pointer event))
+             t))))
 
 (test typing-reaches-the-child
   "The regression test for a terminal that could not be typed into.
@@ -114,20 +128,25 @@ libvterm and onto the screen."
              (is-true (crt.ui:view-key-handler view)
                       "the session must install a key handler")
              (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 1.0d0)
-             (synthesize-key window view "h" 4)
-             (synthesize-key window view "i" 34)
-             (synthesize-key window view (string #\Newline) 36)
+             ;; AppKit declining to build the event is a different failure from
+             ;; the event not arriving, and a blank screen looks the same either
+             ;; way.  Separate them here, or a red run says only "not typed
+             ;; into" and the next hour goes on the wrong half.
+             (is-true (and (synthesize-key window view "h" 4)
+                           (synthesize-key window view "i" 34)
+                           (synthesize-key window view (string #\Newline) 36))
+                      "AppKit would not build a key event on this machine")
              (let ((seen (wait-for (lambda ()
-                                     (let ((text (crt.terminal:with-terminal-locked
-                                                     (terminal)
-                                                   (crt.vt:vt-text
-                                                    (crt.terminal:terminal-vt terminal)
-                                                    0 3))))
+                                     (let ((text (screen-text terminal)))
                                        (and (search "GOT[hi]" text) text))))))
                (is-true seen
-                        "the child never saw the keystrokes; screen was ~S"
-                        (crt.terminal:with-terminal-locked (terminal)
-                          (crt.vt:vt-text (crt.terminal:terminal-vt terminal) 0 3)))))
+                        "the child never saw the keystrokes.~%~
+                         screen ~S, terminal ~:[CLOSED~;open~], child ~:[gone (~:*~S)~;alive~]"
+                        (screen-text terminal)
+                        (crt.vt:vt-open-p (crt.terminal:terminal-vt terminal))
+                        (if (crt.terminal:terminal-alive-p terminal)
+                            t
+                            (crt.terminal:terminal-exit-status terminal)))))
         (crt.ui:end-session session)))))
 
 (test special-keys-become-escape-sequences

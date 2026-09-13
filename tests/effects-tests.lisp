@@ -286,3 +286,61 @@ exactly here, which is why this had to be measured rather than assumed")
               (crt.text:release-text-renderer one)
               (crt.text:release-text-renderer two)
               (crt.text:release-font font)))))))
+
+(test the-quality-knobs-reach-the-targets
+  "BLOOM-QUALITY and BURN-IN-QUALITY size real textures, and changing one
+reallocates them.
+
+Every one of these was wired through to the target that uses it and then frozen,
+because MAKE-GRAPH took only a profile and a size -- so the settings file could
+hold a bloom quality of 1.0 for as long as you liked and the bloom texture was
+still half the screen.  The assertion is on the TEXTURE's dimensions rather than
+on the slot, because agreeing with itself is exactly what the broken version
+did."
+  (when (gpu-or-skip)
+    (let ((graph (crt.effects:make-graph
+                  :profile (crt.settings:find-profile "Default Amber")
+                  :width 256 :height 128
+                  :window-scaling 1.0d0
+                  :bloom-quality 0.5d0 :burn-in-quality 0.5d0)))
+      (unwind-protect
+           (progn
+             (is (= 128 (crt.metal:texture-width (crt.effects::graph-bloom graph)))
+                 "bloom at 0.5 of 256 is 128")
+             (is (= 128 (crt.metal:texture-width (crt.effects::graph-burn-a graph)))
+                 "burn-in at 0.5 of 256 is 128")
+             (is (= 256 (crt.metal:texture-width (crt.effects::graph-static graph)))
+                 "the static target is the full drawable at scaling 1.0")
+             (crt.effects:set-graph-quality graph :bloom-quality 1.0d0
+                                                  :burn-in-quality 0.25d0)
+             (is (= 256 (crt.metal:texture-width (crt.effects::graph-bloom graph)))
+                 "bloom at 1.0 is the full width")
+             (is (= 64 (crt.metal:texture-width (crt.effects::graph-burn-a graph)))
+                 "burn-in at 0.25 is a quarter")
+             (is (= 64 (crt.metal:texture-width (crt.effects::graph-burn-b graph)))
+                 "and so is the other half of the ping-pong")
+             (crt.effects:set-graph-quality graph :window-scaling 0.5d0)
+             (is (= 128 (crt.metal:texture-width (crt.effects::graph-static graph)))
+                 "window scaling resizes the static target")
+             (is (= 256 (crt.metal:texture-width (crt.effects::graph-bloom graph)))
+                 "and leaves the others where they were"))
+        (crt.effects:release-graph graph)))))
+
+(test the-graph-takes-its-quality-from-the-settings
+  "MAKE-GRAPH with no quality arguments reads CRT.SETTINGS:*SETTINGS*.
+
+That is the whole path from the settings file to the size of a texture, and it
+had no caller until now."
+  (when (gpu-or-skip)
+    (let ((settings (crt.settings:copy-settings crt.settings:*settings*)))
+      (unwind-protect
+           (progn
+             (setf (crt.settings:settings-bloom-quality crt.settings:*settings*) 0.25d0)
+             (let ((graph (crt.effects:make-graph
+                           :profile (crt.settings:find-profile "Default Amber")
+                           :width 256 :height 128)))
+               (unwind-protect
+                    (is (= 64 (crt.metal:texture-width (crt.effects::graph-bloom graph)))
+                        "the settings' 0.25 must be what sized the texture")
+                 (crt.effects:release-graph graph))))
+        (setf crt.settings:*settings* settings)))))

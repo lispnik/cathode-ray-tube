@@ -161,12 +161,24 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
   "The profile a new window opens with -- cool-retro-term's own default.")
 
 (defconstant +default-line-spacing+ 0.1d0
-  "The leading every one of the fourteen profiles asks for.
+  "The leading all fourteen built-in profiles ask for.
 
-A constant here rather than read from the profile because the WINDOW is sized
-before a profile is chosen, and a terminal whose rows changed height when you
-switched profiles would be worse than one whose leading is slightly wrong for
-some of them.  All fourteen say 0.1, so there is nothing to choose between.")
+Only a fallback now, for the paths that have no profile in hand.  The profile's
+own LINE-SPACING is what the renderer is built with -- see PROFILE-METRICS --
+which matters for an imported or hand-written profile and for nothing else,
+since every built-in one says 0.1.")
+
+(defun profile-metrics (profile)
+  "(values LINE-SPACING FONT-WIDTH) for PROFILE, as the text renderer wants them.
+
+Two of the twenty-seven profile keys that reach the glyph grid rather than a
+shader, and the pair that decides the SIZE OF A CELL -- so every call that
+measures, fits or builds a grid has to agree on them or a resize shifts every
+glyph.  One reader, used by all of them."
+  (if profile
+      (values (float (crt.settings:profile-line-spacing profile) 1d0)
+              (float (crt.settings:profile-font-width profile) 1d0))
+      (values +default-line-spacing+ 1.0d0)))
 
 (defparameter *default-columns* 80)
 (defparameter *default-rows* 25
@@ -236,9 +248,11 @@ whatever size the window is dragged to."
     ;; two gives a window half the size it should be on a Retina display.
     (unless (and width height)
       (multiple-value-bind (pixel-width pixel-height)
-          (crt.text:grid-pixel-size loaded columns rows :scale scale
-                                    :margin margin
-                                    :line-spacing +default-line-spacing+)
+          (multiple-value-bind (line-spacing font-width) (profile-metrics chosen)
+            (crt.text:grid-pixel-size loaded columns rows :scale scale
+                                      :margin margin
+                                      :line-spacing line-spacing
+                                      :font-width font-width))
         (let ((backing (screen-backing-scale)))
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
@@ -253,12 +267,19 @@ whatever size the window is dragged to."
   (let* ((window (make-crt-window :width width :height height :title title
                                   :draw-function #'draw-session))
          (view (crt-window-view window)))
+    ;; TimeManager.qml advances the effect clock every Nth frame rather than
+    ;; every frame, and the quantisation is part of the look: flicker reads as
+    ;; chunky rather than smooth.  The view defaulted to upstream's 3 and there
+    ;; was no way to reach the setting that holds it.
+    (setf (view-frame-skip view)
+          (crt.settings:settings-effects-frame-skip crt.settings:*settings*))
     (destructuring-bind (dw dh) (view-drawable-size view)
+      (multiple-value-bind (line-spacing font-width) (profile-metrics profile)
       (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh
                                                     :scale scale
                                                     :margin margin
-                                                    :line-spacing
-                                                    +default-line-spacing+))
+                                                    :line-spacing line-spacing
+                                                    :font-width font-width))
              (session (%make-session :window window :view view
                                      :renderer renderer :font loaded
                                      :margin (float margin 1.0)
@@ -267,9 +288,12 @@ whatever size the window is dragged to."
         (when effects
           (setf (session-graph session)
                 (crt.effects:make-graph :profile profile :width dw :height dh)))
-        (multiple-value-bind (cols rows)
-            (crt.text:text-grid-size loaded dw dh :scale scale :margin margin
-                                     :line-spacing +default-line-spacing+)
+        ;; The grid MAKE-TEXT-RENDERER already fitted, rather than a second
+        ;; TEXT-GRID-SIZE with the same arguments: two computations of the same
+        ;; number are two chances to disagree, and the one that decides how big
+        ;; the child thinks it is has to be the one the glyphs are drawn on.
+        (let ((cols (crt.text:text-renderer-cols renderer))
+              (rows (crt.text:text-renderer-rows renderer)))
           (setf (session-terminal session)
                 (crt.terminal:make-terminal
                  :rows rows :cols cols :command command :directory directory
@@ -301,7 +325,7 @@ whatever size the window is dragged to."
                     :wheel (lambda (event) (handle-scroll-wheel session event))))
         (push session *sessions*)
         (show-crt-window window)
-        session))))
+        session)))))
 
 (defun end-session (session)
   (setf *sessions* (remove session *sessions*))
@@ -364,13 +388,16 @@ consequence of magnifying bitmaps by integers rather than interpolating them."
         (when (session-font session) (crt.text:release-font (session-font session)))
         (crt.text:release-text-renderer (session-renderer session))
         (destructuring-bind (dw dh) (view-drawable-size (session-view session))
-          (setf (session-font session) font
-                (session-scale session) scale
-                (session-renderer session)
-                (crt.text:make-text-renderer :font font :width dw :height dh
-                                             :scale scale
-                                             :margin (session-margin session)
-                                             :line-spacing +default-line-spacing+))
+          (multiple-value-bind (line-spacing font-width)
+              (profile-metrics (session-profile session))
+            (setf (session-font session) font
+                  (session-scale session) scale
+                  (session-renderer session)
+                  (crt.text:make-text-renderer :font font :width dw :height dh
+                                               :scale scale
+                                               :margin (session-margin session)
+                                               :line-spacing line-spacing
+                                               :font-width font-width)))
           (fit-terminal-to-view session))
         t))))
 

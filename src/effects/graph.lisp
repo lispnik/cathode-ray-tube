@@ -88,8 +88,23 @@ cool-retro-term, because the exact values are what the look is tuned against."
 
 ;;; Construction -------------------------------------------------------------------
 
-(defun make-graph (&key profile width height)
-  (let ((graph (%make-graph :profile profile)))
+(defun make-graph (&key profile width height
+                        (window-scaling (settings:settings-window-scaling
+                                         settings:*settings*))
+                        (bloom-quality (settings:settings-bloom-quality
+                                        settings:*settings*))
+                        (burn-in-quality (settings:settings-burn-in-quality
+                                          settings:*settings*)))
+  "The render graph for one view.
+
+The three quality knobs come from the settings rather than from the struct's
+defaults, which is the whole reason they are arguments: they were wired through
+to every target that uses them and frozen at 1.0, 0.5 and 0.5 because nothing
+ever passed anything else."
+  (let ((graph (%make-graph :profile profile
+                            :window-scaling window-scaling
+                            :bloom-quality bloom-quality
+                            :burn-in-quality burn-in-quality)))
     (setf (graph-noise graph) (load-noise-texture)
           ;; REPEAT for the noise: the dynamic pass scrolls its coordinates with
           ;; time without bounding them, so clamping would freeze the grain into
@@ -99,6 +114,29 @@ cool-retro-term, because the exact values are what the look is tuned against."
           (graph-clamp-sampler graph)
           (metal:make-sampler :address metal:+address-clamp-to-edge+ :label "effects"))
     (resize-graph graph width height)
+    graph))
+
+(defun set-graph-quality (graph &key window-scaling bloom-quality burn-in-quality)
+  "Change the quality knobs and reallocate the targets that depend on them.
+
+RESIZE-GRAPH alone will not do it: it returns early when the drawable is the
+same size, which it is -- what changed is the FRACTION of it each target gets.
+So the targets are dropped first and the reallocation is unconditional."
+  (let ((width (graph-width graph))
+        (height (graph-height graph))
+        (changed nil))
+    (macrolet ((knob (accessor value)
+                 `(when (and ,value (/= ,value (,accessor graph)))
+                    (setf (,accessor graph) ,value changed t))))
+      (knob graph-window-scaling window-scaling)
+      (knob graph-bloom-quality bloom-quality)
+      (knob graph-burn-in-quality burn-in-quality))
+    (when changed
+      ;; Zero the size so RESIZE-GRAPH cannot decide there is nothing to do, and
+      ;; drop the cached bezel, which was rendered at the old scale.
+      (setf (graph-width graph) 0 (graph-height graph) 0
+            (graph-frame-valid graph) nil)
+      (resize-graph graph width height))
     graph))
 
 (defun release-graph (graph)
@@ -117,7 +155,8 @@ accumulator and the bloom run at a fraction of the screen, which is what makes
 them affordable and also what gives them their softness."
   (let ((width (max 1 (floor width)))
         (height (max 1 (floor height))))
-    (unless (and (= width (graph-width graph)) (= height (graph-height graph)))
+    (unless (and (= width (graph-width graph)) (= height (graph-height graph))
+                 (graph-static graph))
       (setf (graph-width graph) width (graph-height graph) height)
       ;; ACCESSOR is a SYMBOL, not #'accessor: (fdefinition (list 'setf ...))
       ;; needs a function NAME, and handing it a function object fails with
