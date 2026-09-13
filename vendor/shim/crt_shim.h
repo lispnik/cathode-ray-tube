@@ -16,6 +16,29 @@
  * Reading a structure THROUGH A POINTER is fine in CFFI, so VTermScreenCell is
  * passed through unchanged and decoded on the Lisp side with `defcstruct'.
  * Only by-value crossings appear here.
+ *
+ * Could this file be deleted?  Measured, because the answer moved once already:
+ *
+ *   SB-ALIEN can do all of it -- structs by value in both directions, and the
+ *   variadic ioctl too (see crt_set_winsize below).  So on SBCL alone, yes,
+ *   nearly: what would survive is the errno block, whose VALUES still have to
+ *   come from <errno.h> rather than from someone's memory.
+ *
+ *   But CFFI refuses a by-value struct callback on BOTH implementations --
+ *   SBCL signals CASE-FAILURE, ECL a SIMPLE-ERROR -- so keeping the ECL leg
+ *   means writing these trampolines twice, once in sb-alien and once in ECL's
+ *   ffi:c-inline.  The second copy is C embedded in Lisp strings: the same C as
+ *   this file, scattered and harder to read, and duplicated.
+ *
+ * So this is not a workaround for a weakness in CFFI.  It is the one place
+ * where a C API that passes structs by value meets two Lisp implementations
+ * that cannot, and one readable file beats two dialects of the same thing.
+ * The cost is 343 lines in a build that already runs cc for libvterm's nine.
+ *
+ * The reduction that WOULD be real is libghostty-vt: its API is extern "C"
+ * with no by-value crossings, and src/vt/protocol.lisp is the seam for it.
+ * That deletes the callbacks and the screen accessors and leaves the ioctl and
+ * the errno values.
  */
 
 #ifndef CRT_SHIM_H
