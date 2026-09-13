@@ -75,6 +75,12 @@ place is that this does not allocate once it has warmed up."
    (painted :initform nil :accessor terminal-painted)
    (reader :initform nil :accessor terminal-reader)
    (running :initform t :accessor terminal-running)
+   ;; True once TERMINAL-CLOSE has asked the reader to stop, which is how
+   ;; FINISH-TERMINAL tells "the child went" from "we are shutting down".  The
+   ;; two want opposite things: the first should wait for a status, the second
+   ;; must not wait at all, because the child is still running and the only
+   ;; thing that will signal it is the PTY-CLOSE waiting on this thread to join.
+   (stopping :initform nil :accessor terminal-stopping)
    (outbound :initform '() :accessor terminal-outbound)
    (wake-read :initform -1 :accessor terminal-wake-read)
    (wake-write :initform -1 :accessor terminal-wake-write)
@@ -217,11 +223,18 @@ COMMAND defaults to the user's login shell."
 
 (defun finish-terminal (terminal)
   (setf (terminal-running terminal) nil)
-  ;; PTY-WAIT, not PTY-REAP.  The loop above stops on HUP, which means the child
-  ;; has closed the pty and not that waitpid can collect it yet -- and a
-  ;; non-blocking reap in that window answers "not yet", which the OR then turned
-  ;; into "exited cleanly".  See the note on PTY-WAIT.
-  (let ((status (or (pty:pty-wait (terminal-pty terminal)) 0)))
+  ;; PTY-WAIT, not PTY-REAP, when the CHILD ended this.  The loop above stops on
+  ;; HUP, which means the child has closed the pty and not that waitpid can
+  ;; collect it yet -- and a non-blocking reap in that window answers "not yet",
+  ;; which the OR then turns into "exited cleanly".  See the note on PTY-WAIT.
+  ;;
+  ;; But when WE ended it, waiting is exactly wrong: the child is alive, the only
+  ;; thing that will signal it is the PTY-CLOSE currently joining this thread,
+  ;; and waiting here makes the join time out for nothing.  PTY-CLOSE reaps it.
+  (let ((status (or (if (terminal-stopping terminal)
+                        (pty:pty-reap (terminal-pty terminal))
+                        (pty:pty-wait (terminal-pty terminal)))
+                    0)))
     (setf (terminal-exit-status terminal) status)
     (let ((hook (terminal-on-exit terminal)))
       (when hook
@@ -410,7 +423,8 @@ every frame: a terminal at rest copies nothing."
 ;;; Teardown ---------------------------------------------------------------------------
 
 (defun terminal-close (terminal)
-  (setf (terminal-running terminal) nil)
+  (setf (terminal-stopping terminal) t
+        (terminal-running terminal) nil)
   (wake-reader terminal)
   (let ((thread (terminal-reader terminal)))
     (when (and thread (bt2:thread-alive-p thread))

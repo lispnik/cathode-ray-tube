@@ -245,7 +245,7 @@ anybody reading the number will expect."
                       (pty-exit-status pty) code))))))))))
 
 (defun pty-wait (pty &key (timeout 2.0))
-  "Reap the child, waiting for it.  The status, or NIL if there is no child.
+  "Reap the child, waiting for it.  The status, or NIL if it has not gone.
 
 PTY-REAP asks whether the child has already become a zombie and answers NIL when
 it has not.  That is the right answer to that question and the WRONG one to ask
@@ -256,13 +256,15 @@ window WNOHANG returns 0 and the status is simply not available yet.
 
 Reporting that as 0 -- which is what `(or (pty-reap pty) 0)' did -- says the
 child EXITED CLEANLY.  So a shell that died with status 3 was reported as having
-succeeded, on a machine slow enough to open the window.  It took a CI runner to
-show it, which is exactly the kind of bug that never reproduces on the desk it
-was written at.
+succeeded, on a machine slow enough to open the window.
 
-Spin on WNOHANG first and block only if that runs out, so the ordinary case --
-already a zombie, or a microsecond away from it -- never blocks at all, and the
-pathological one cannot wedge the reader thread forever either."
+BOUNDED, and never a blocking waitpid.  The first version of this ended with one
+and it deadlocked: waitpid with no WNOHANG waits for a child that only PTY-CLOSE
+will signal, PTY-CLOSE first has to claim the pid under the lock, and the lock
+was being held across the wait.  The suite hung on CI.  A child that has really
+gone is collectable within microseconds, so the loop below finds it immediately
+and the timeout is only ever reached by a child that is still running -- which is
+not a case that wants waiting for at all."
   (when pty
     (or (pty-exit-status pty)
         (pty-reap pty)
@@ -270,26 +272,8 @@ pathological one cannot wedge the reader thread forever either."
                            (* timeout internal-time-units-per-second))))
           (loop (let ((status (pty-reap pty)))
                   (when status (return status))
-                  (when (> (get-internal-real-time) deadline)
-                    (return (blocking-reap pty)))
+                  (when (> (get-internal-real-time) deadline) (return nil))
                   (sleep 0.002)))))))
-
-(defun blocking-reap (pty)
-  "waitpid with no WNOHANG.  The last resort of PTY-WAIT.
-
-The lock is held across the wait deliberately: PTY-CLOSE must not start
-signalling a pid this is in the middle of collecting."
-  (with-pty-locked (pty)
-    (let ((pid (pty-pid pty)))
-      (when (> pid 0)
-        (cffi:with-foreign-object (status :int)
-          (when (> (%waitpid pid status 0) 0)
-            (let* ((raw (cffi:mem-ref status :int))
-                   (code (if (zerop (logand raw #x7f))
-                             (logand (ash raw -8) #xff)
-                             (+ 128 (logand raw #x7f)))))
-              (setf (pty-pid pty) -1
-                    (pty-exit-status pty) code))))))))
 
 (defun pty-close (pty)
   "Close the fd, hang the child up, reap it, and free argv and envp.

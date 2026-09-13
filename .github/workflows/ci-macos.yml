@@ -103,7 +103,14 @@ jobs:
                             (objc.runloop:window-server-p)
                             (or (crt.metal:device-name) "none"))'
 
+      # Its own timeout, well under the job's thirty minutes.  A suite that
+      # DEADLOCKS does not fail, it hangs -- and a hang consumes the whole job
+      # budget and then reports "cancelled", with no summary and no failing test
+      # named.  That happened: a blocking waitpid holding the pty lock, racing a
+      # two-second join, which never reproduced on a developer machine.  Eight
+      # minutes is about four times the suite's honest runtime.
       - name: Run the suite
+        timeout-minutes: 8
         run: make test
 
       - name: Build the bundle

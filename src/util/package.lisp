@@ -161,7 +161,7 @@
    #:terminal #:make-terminal #:terminal-close
    #:terminal-vt #:terminal-pty #:terminal-reader #:terminal-lock
    #:terminal-rows #:terminal-cols #:terminal-resize
-   #:terminal-bell-count #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
+   #:terminal-bell-count #:terminal-stopping #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
    #:terminal-send #:terminal-send-string #:terminal-paste
    #:terminal-mouse-reporting-p #:terminal-alternate-screen-p
    #:terminal-report-mouse #:terminal-scroll #:terminal-scroll-to-bottom

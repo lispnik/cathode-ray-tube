@@ -105,16 +105,35 @@ decay the phosphor at the display's refresh rate instead of the terminal's")
              "title was ~S" (crt.terminal:terminal-title terminal))))
 
 (test close-is-prompt-and-idempotent
-  (let ((terminal (crt.terminal:make-terminal :rows 24 :cols 80
-                                      :command '("/bin/sh" "-c" "sleep 30"))))
-    (let ((start (get-internal-real-time)))
-      (crt.terminal:terminal-close terminal)
-      (let ((elapsed (/ (float (- (get-internal-real-time) start))
-                        internal-time-units-per-second)))
-        ;; The reader polls with a 250ms timeout and the close bounds its join
-        ;; at two seconds, so anything near three means something is wedged.
-        (is (< elapsed 3.0) "closing took ~,2Fs" elapsed)))
-    (finishes (crt.terminal:terminal-close terminal))))
+  "Closing a terminal whose child is ALIVE, which is the ordinary case: a person
+closing a window is not waiting for their shell to finish first.
+
+The bound is tight on purpose.  Closing does not have to wait for anything -- the
+reader notices within one poll timeout, and FINISH-TERMINAL does not try to
+collect a child it knows is still running, because the only thing that will
+signal it is the PTY-CLOSE waiting on that very thread to join.
+
+A version of this DEADLOCKED, and it is worth saying exactly how, because the
+suite here did not catch it and CI did: FINISH-TERMINAL ended with a blocking
+waitpid, holding the pty lock, waiting for a child that only PTY-CLOSE would
+kill -- and PTY-CLOSE had to take that lock before it could kill anything.  It
+was a race with the two-second join timeout, so it hung roughly never on an idle
+machine and reliably enough on a loaded runner to stop the suite dead.  A hang,
+not a failure: the job simply never finished."
+  (dotimes (i 5)
+    (let ((terminal (crt.terminal:make-terminal
+                     :rows 24 :cols 80
+                     :command '("/bin/sh" "-c" "sleep 30"))))
+      (is-true (crt.terminal:terminal-alive-p terminal)
+               "run ~D: the child must be running, or this closes nothing" i)
+      (let ((start (get-internal-real-time)))
+        (crt.terminal:terminal-close terminal)
+        (let ((elapsed (/ (float (- (get-internal-real-time) start))
+                          internal-time-units-per-second)))
+          ;; One poll timeout is 250ms.  Anything past a second means the close
+          ;; waited for something, and there is nothing here it should wait for.
+          (is (< elapsed 1.0) "run ~D: closing took ~,2Fs" i elapsed)))
+      (finishes (crt.terminal:terminal-close terminal)))))
 
 (test the-bell-is-counted-and-survives-the-close
   "BEL increments a count the UI polls, rather than calling back into AppKit.

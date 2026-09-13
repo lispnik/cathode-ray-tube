@@ -89,7 +89,10 @@ jobs:
       # Tier 1 only, and named as such: the portable half of the program.
       # Loading :cathode-ray-tube would pull in objc and the UI, which is not
       # what this leg is for.
+      # See the note on the same step in ci-macos.yml: a deadlock hangs rather
+      # than fails, and a hang reports "cancelled" with nothing in it to read.
       - name: Run the portable suite
+        timeout-minutes: 8
         run: |
           ecl --norc \
             --eval '(require :asdf)' \
