@@ -57,16 +57,8 @@ scope, so CFFI's `:default` module finds nothing — not even `strlen`. It is wh
 the [`objc`](https://github.com/lispnik/objc) bindings need the fork to run on
 ECL at all.
 
-Between them those two are the whole of what a Lisp-side replacement for
-`vendor/shim/` needs. The first piece of that replacement has landed:
-`crt_set_winsize` and `crt_get_winsize` are gone, and `src/pty/ioctl.lisp`
-calls `ioctl` directly — `sb-alien` splicing `&optional` into the signature on
-SBCL, `si:call-cfun` with a trailing `:default 2` on ECL. The request numbers
-are *derived* from `<sys/ioccom.h>`'s `_IOC` rather than written down, and
-asserted against a live pty.
-
-The rest of the shim stays, and the header of `vendor/shim/crt_shim.h` has the
-measurements and the reasoning.
+Between them those two are the whole of what replacing the C shim needed, and
+that replacement is now complete — see *The FFI boundary* below.
 
 CI builds the fork from source, cached against `develop`'s SHA, and asserts it
 really is the fork before running anything — so a silent fallback to Homebrew's
@@ -103,33 +95,53 @@ make probe    # prove this machine can do what the design assumes
 - Do the by-value structure crossings work — `MTLClearColor` (a 32-byte
   homogeneous float aggregate), `MTLViewport` and `MTLRegion` (48 bytes,
   indirect), and an `NSError**` out-param?
-- Does libvterm drive correctly through the shim, including a `VTermRect`
-  arriving in a Lisp callback **by value**?
+- Does libvterm drive correctly, including a `VTermRect` arriving in a Lisp
+  callback **by value**? (Through C when the probe was written; through
+  `sb-alien` now.)
 - Does `TIOCSWINSZ` actually reach the child?
 
 On an M3 it prints 29 checks and 0 failures. Re-run it after an OS or Xcode
 update: every answer in it is about the platform, not about this code.
 
-## Why there is C in here
+## The FFI boundary, and the C that used to be here
 
-`vendor/shim/crt_shim.c` is about 200 lines and exists for one reason: CFFI,
-without libffi, cannot pass or return a structure by value. `foreign-funcall`
-cannot call such a function and `defcallback` signals `CASE-FAILURE` when asked
-to receive one. libvterm crosses that line in four calls and three callbacks,
-and Apple's arm64 variadic ABI breaks an eighth case:
+libvterm passes `VTermRect` (four ints) and `VTermPos` (two ints) **by value**,
+in both directions — four calls and three callbacks — and `ioctl` is variadic.
+CFFI can express none of that: `foreign-funcall` refuses the call and
+`defcallback` signals `CASE-FAILURE`. So there was a ~200-line C shim,
+`vendor/shim/`, flattening every crossing into loose integers.
 
-```
-plain foreign-funcall of ioctl(TIOCSWINSZ)   returns -1, child's `stty size': "0 0"
-crt_set_winsize                              returns  0, child's `stty size': "30 100"
-```
+**It is gone.** Both implementations can express those crossings; only CFFI
+cannot.
 
-The alternative is `cffi-libffi`, which needs `cffi-grovel` and therefore a C
-toolchain at *Lisp* build time, and risks linking Homebrew's libffi into a
-bundle that has to run on a Mac which has never had Homebrew. Flattening the
-crossings in the C we are already compiling is cheaper and has no runtime cost.
+| | SBCL | ECL (`lispnik/ecl`) |
+|---|---|---|
+| struct by value, outbound | `sb-alien` struct type | `si:call-cfun`, member list |
+| struct by value, into a callback | `define-alien-callable` | `si::make-dynamic-callback` |
+| variadic `ioctl` | `&optional` in the signature | trailing `:default n-fixed` |
 
-`vendor/` builds to a single `libcathode.dylib` that links nothing outside
-`/usr/lib` and `/System` — `make -C vendor check` enforces that.
+`src/vt/vterm-abi.lisp` and `src/pty/ioctl.lisp` hold everything that does not
+vary; `*-sbcl.lisp` and `*-ecl.lisp` hold what does — one small file each,
+selected by the `.asd`, exactly as [`objc`](https://github.com/lispnik/objc)
+splits `abi.lisp` from `abi-ecl.lisp`. Those four files are the *only* ones
+below the seam permitted to name an implementation, and `tests/seam-tests.lisp`
+asserts both that nothing else does and that each of them still needs to.
+
+Two details worth knowing. A callable's struct parameter is **not addressable**
+— `(addr p)` is rejected as "not a valid L-value" — so each is copied into a
+`with-alien` local first. And the `ioctl` request numbers are *derived* from
+`<sys/ioccom.h>`'s `_IOC` rather than written down, because `2148037735` is
+right or wrong with nothing about it to say which.
+
+The cost is one FFI crossing per cell instead of per row. Measured: 80 crossings
+are 0.68 µs against 5.9 µs to decode the row, so a full 25-row frame is 0.148 ms
+— about a thousandth of a 60 Hz budget.
+
+`vendor/` is now upstream libvterm, unmodified, built to a single
+`libcathode.dylib` that links nothing outside `/usr/lib` and `/System` —
+`make -C vendor check` enforces that. A C compiler is still needed to compile
+libvterm, but only there: never at Lisp build time, and never by anyone running
+the application.
 
 ## Licence
 

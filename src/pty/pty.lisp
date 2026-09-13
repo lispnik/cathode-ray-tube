@@ -179,27 +179,6 @@ Returns a PTY, or signals.  The child execve's and never returns to Lisp."
 (defun pty-alive-p (pty)
   (and pty (> (pty-pid pty) 0) (null (pty-exit-status pty))))
 
-(cffi:defcfun ("crt_errno" %errno) :int)
-(cffi:defcfun ("crt_eintr" %eintr) :int)
-(cffi:defcfun ("crt_eagain" %eagain) :int)
-(cffi:defcfun ("crt_eio" %eio) :int)
-
-(defun interrupted-p ()
-  "True when the call that just failed was INTERRUPTED rather than broken.
-
-EINTR, or EAGAIN on a descriptor someone has made non-blocking.  Neither says
-anything about the child, and both are routine: SBCL's collector stops the world
-by signalling every other thread, and a thread sitting in a blocking poll() or
-read() comes back -1/EINTR when that happens.
-
-A reader loop that treated a negative return as `the child is gone' therefore
-ended whenever a collection landed on it, leaving a terminal that had died with
-its child still running -- pid valid, master open, reader thread alive.  It
-depends on when the collector runs, so it never happened here and happened
-regularly on a CI runner."
-  (let ((e (%errno)))
-    (or (= e (%eintr)) (= e (%eagain)))))
-
 (defun pty-read (pty buffer count)
   "read(2) up to COUNT bytes into the foreign BUFFER.
 

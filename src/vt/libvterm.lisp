@@ -11,9 +11,12 @@ entirely ours.")
   ((handle :initform nil :accessor vt-handle)
    (screen :initform nil :accessor vt-screen)
    (state  :initform nil :accessor vt-state)
-   (context :initform nil :accessor vt-context
-            :documentation "The shim's callback box; freed after vterm_free,
-because libvterm calls back during teardown.")
+   (callbacks :initform nil :accessor vt-callbacks
+              :documentation "The VTermScreenCallbacks table, malloc'd.
+
+libvterm keeps the POINTER and reads through it on every write, so this outlives
+the call that installed it and is freed after vterm_free -- not before, because
+libvterm calls back during teardown and would read freed memory.")
    (id :initform nil :accessor vt-id
        :documentation "Our key in *TERMINALS*, passed to C as the user datum.
 An integer rather than a pointer to a Lisp object: the collector moves Lisp
@@ -78,8 +81,25 @@ loses a screen update; one that unwinds loses the process."
                      ',name condition)
              0))))))
 
-(define-vt-callback vt-damage :int
-    ((start-row :int) (end-row :int) (start-col :int) (end-col :int) (user :pointer))
+(defmacro define-vt-handler (name (&rest args) &body body)
+  "A libvterm callback whose C signature passes a structure BY VALUE.
+
+Identical in shape to DEFINE-VT-CALLBACK and different in one respect: this
+produces an ordinary Lisp FUNCTION rather than a cffi:defcallback, because CFFI
+cannot receive a structure by value at all.  The seam -- vterm-abi-sbcl.lisp or
+vterm-abi-ecl.lisp -- builds the real C entry point and calls this with the
+structure already taken apart, which is exactly what the C trampolines in
+vendor/shim did before them.
+
+So the body is the same code it always was, and stays portable."
+  (let ((user (car (last args))))
+    (multiple-value-bind (forms declarations) (alexandria:parse-body body)
+      `(defun ,name ,args
+         ,@declarations
+         (let ((vt (terminal-for ,user)))
+           (if vt (progn ,@forms) 0))))))
+
+(define-vt-handler vt-damage (start-row end-row start-col end-col user)
   (declare (ignore start-col end-col))
   ;; Rows, not cells: the renderer uploads whole dirty rows, so finer damage
   ;; would be discarded.  vterm_screen_set_damage_merge is told the same thing.
@@ -88,17 +108,14 @@ loses a screen update; one that unwinds loses the process."
           do (setf (sbit dirty row) 1)))
   1)
 
-(define-vt-callback vt-moverect :int
-    ((dsr :int) (der :int) (dsc :int) (dec :int)
-     (ssr :int) (ser :int) (ssc :int) (sec :int) (user :pointer))
+(define-vt-handler vt-moverect (dsr der dsc dec ssr ser ssc sec user)
   (declare (ignore dsc dec ssc sec))
   (let ((dirty (vt-dirty vt)))
     (loop for row from (max 0 (min dsr ssr)) below (min (max der ser) (length dirty))
           do (setf (sbit dirty row) 1)))
   1)
 
-(define-vt-callback vt-movecursor :int
-    ((row :int) (col :int) (old-row :int) (old-col :int) (visible :int) (user :pointer))
+(define-vt-handler vt-movecursor (row col old-row old-col visible user)
   (let ((dirty (vt-dirty vt)))
     ;; Both rows: the cursor is drawn over a cell, so the one it left has to be
     ;; repainted as well as the one it arrived at.
@@ -299,22 +316,32 @@ width 0 tells it.")
         ;; Callbacks BEFORE the reset: a reset damages the whole screen, and
         ;; installing afterwards drops that -- so the first frame looks clean
         ;; when it is not, and nothing repaints until something else changes.
-        (cffi:with-foreign-object (cbs '(:struct crt-screen-callbacks))
-          (macrolet ((set-cb (slot callback)
-                       `(setf (cffi:foreign-slot-value cbs '(:struct crt-screen-callbacks)
-                                                       ',slot)
-                              (cffi:callback ,callback))))
-            (set-cb damage vt-damage)
-            (set-cb moverect vt-moverect)
-            (set-cb movecursor vt-movecursor)
-            (set-cb settermprop vt-settermprop)
-            (set-cb bell vt-bell)
-            (set-cb resize vt-resize-cb)
-            (set-cb sb-pushline vt-sb-pushline)
-            (set-cb sb-popline vt-sb-popline)
-            (set-cb sb-clear vt-sb-clear))
-          (setf (vt-context vt)
-                (%crt-screen-set-callbacks screen cbs (cffi:make-pointer id))))
+        (setf *damage-handler* #'vt-damage
+              *moverect-handler* #'vt-moverect
+              *movecursor-handler* #'vt-movecursor)
+        (multiple-value-bind (damage moverect movecursor) (%screen-trampolines)
+          ;; The table is libvterm's own VTermScreenCallbacks now, not a
+          ;; flattened stand-in, so this is vterm_screen_set_callbacks directly.
+          ;; It is kept ALIVE for the terminal's life -- libvterm stores the
+          ;; pointer and reads it on every write -- which is what VT-CALLBACKS
+          ;; is for; a with-foreign-object here would be freed before the first
+          ;; callback arrived.
+          (let ((cbs (cffi:foreign-alloc '(:struct vterm-screen-callbacks))))
+            (macrolet ((set-cb (slot value)
+                         `(setf (cffi:foreign-slot-value
+                                 cbs '(:struct vterm-screen-callbacks) ',slot)
+                                ,value)))
+              (set-cb damage damage)
+              (set-cb moverect moverect)
+              (set-cb movecursor movecursor)
+              (set-cb settermprop (cffi:callback vt-settermprop))
+              (set-cb bell (cffi:callback vt-bell))
+              (set-cb resize (cffi:callback vt-resize-cb))
+              (set-cb sb-pushline (cffi:callback vt-sb-pushline))
+              (set-cb sb-popline (cffi:callback vt-sb-popline))
+              (set-cb sb-clear (cffi:callback vt-sb-clear)))
+            (setf (vt-callbacks vt) cbs)
+            (%vterm-screen-set-callbacks screen cbs (cffi:make-pointer id))))
         (%vterm-screen-reset screen 1)
         (%vterm-screen-enable-altscreen screen 1)
         (%vterm-screen-enable-reflow screen t)
@@ -326,10 +353,10 @@ width 0 tells it.")
     (%vterm-free (vt-handle vt))
     (setf (vt-handle vt) nil (vt-screen vt) nil (vt-state vt) nil))
   ;; After vterm_free, not before: libvterm calls back during teardown, and the
-  ;; box the trampolines read is this one.
-  (when (vt-context vt)
-    (%crt-screen-context-free (vt-context vt))
-    (setf (vt-context vt) nil))
+  ;; table it reads is this one.
+  (when (vt-callbacks vt)
+    (cffi:foreign-free (vt-callbacks vt))
+    (setf (vt-callbacks vt) nil))
   (when (vt-scratch vt)
     (cffi:foreign-free (vt-scratch vt))
     (setf (vt-scratch vt) nil (vt-scratch-cols vt) 0))
@@ -421,7 +448,7 @@ the empty string, its cells are blank cells, and writing to it is a no-op."
          (scratch (ensure-scratch vt)))
     ;; One FFI call per ROW.  Per cell would be sixty times as many crossings
     ;; for the same bytes.
-    (%crt-screen-get-row (vt-screen vt) row cols scratch)
+    (screen-get-row (vt-screen vt) row cols scratch)
     (dotimes (i cols cells)
       (let ((existing (aref cells i)))
         (setf (aref cells i)
@@ -430,7 +457,7 @@ the empty string, its cells are blank cells, and writing to it is a no-op."
 
 (defmethod vt-cell ((vt libvterm-vt) row col)
   (cffi:with-foreign-object (cell '(:struct vterm-screen-cell))
-    (if (plusp (%crt-screen-get-cell (vt-screen vt) row col cell))
+    (if (plusp (%screen-get-cell (vt-screen vt) row col cell))
         (decode-cell cell)
         (make-cell))))
 
@@ -452,12 +479,12 @@ the empty string, its cells are blank cells, and writing to it is a no-op."
   (let* ((end-col (or end-col (vt-cols vt)))
          ;; Ask for the length first, then fill: the usual two-call dance, and
          ;; necessary because a cell can be several UTF-8 bytes.
-         (size (%crt-screen-get-text (vt-screen vt) (cffi:null-pointer) 0
+         (size (%screen-get-text (vt-screen vt) (cffi:null-pointer) 0
                                      start-row end-row start-col end-col)))
     (if (zerop size)
         ""
         (cffi:with-foreign-object (buffer :uint8 (1+ size))
-          (let ((written (%crt-screen-get-text (vt-screen vt) buffer (1+ size)
+          (let ((written (%screen-get-text (vt-screen vt) buffer (1+ size)
                                                start-row end-row start-col end-col)))
             (babel:octets-to-string
              (let ((octets (make-array written :element-type '(unsigned-byte 8))))

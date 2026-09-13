@@ -1,4 +1,4 @@
-# vendor/Makefile -- libvterm and the shim, as one dylib.
+# vendor/Makefile -- libvterm, as a dylib.
 #
 # ONE library rather than two, and built here rather than taken from Homebrew,
 # for the same reason: this has to run on a Mac that has never had Homebrew.
@@ -11,17 +11,22 @@
 # files with no dependencies.  A C compiler is needed to compile C, but it is
 # needed only HERE -- never at Lisp build time, and never by anyone running
 # the application.
+#
+# There used to be a shim/ beside it, flattening the structures libvterm passes
+# BY VALUE because CFFI cannot express one.  It is gone: sb-alien can, and so can
+# ECL's dynamic FFI on lispnik/ecl, so the crossings are made from Lisp now --
+# see src/vt/vterm-abi.lisp and src/pty/ioctl.lisp.  What is left here is
+# upstream libvterm, unmodified.
 
 NAME    = cathode
 DYLIB   = lib/lib$(NAME).dylib
 VTERM   = libvterm
-SHIM    = shim
 
 CC     ?= cc
 # -fvisibility=hidden would hide libvterm's own symbols, which Lisp calls
 # directly; everything in this library is public API by construction.
 CFLAGS ?= -O2 -g -fPIC -Wall
-CFLAGS += -I$(VTERM)/include -I$(VTERM)/src -I$(SHIM) -DHAVE_STDBOOL_H
+CFLAGS += -I$(VTERM)/include -I$(VTERM)/src -DHAVE_STDBOOL_H
 # Deployment target pinned so the dylib loads on the oldest OS the app claims.
 # CADisplayLink puts our floor at macOS 14; keep the two in step.
 CFLAGS += -mmacosx-version-min=14.0
@@ -33,10 +38,9 @@ CFLAGS += -mmacosx-version-min=14.0
 LDFLAGS += -dynamiclib -install_name lib$(NAME).dylib \
            -mmacosx-version-min=14.0 -compatibility_version 1.0 -current_version 1.0
 
-SOURCES = $(wildcard $(VTERM)/src/*.c) $(SHIM)/crt_shim.c
+SOURCES = $(wildcard $(VTERM)/src/*.c)
 OBJECTS = $(SOURCES:.c=.o)
-HEADERS = $(VTERM)/include/vterm.h $(VTERM)/include/vterm_keycodes.h \
-          $(SHIM)/crt_shim.h
+HEADERS = $(VTERM)/include/vterm.h $(VTERM)/include/vterm_keycodes.h
 
 .PHONY: all clean check install-headers
 

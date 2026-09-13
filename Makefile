@@ -45,8 +45,7 @@ deps: vendor
 
 vendor: $(DYLIB)
 
-$(DYLIB): $(wildcard $(VENDOR)/libvterm/src/*.c) $(VENDOR)/shim/crt_shim.c \
-          $(VENDOR)/shim/crt_shim.h
+$(DYLIB): $(wildcard $(VENDOR)/libvterm/src/*.c)
 	$(MAKE) -C $(VENDOR)
 
 # The guard that matters, run where it is cheap to fix: a dylib that picks up a

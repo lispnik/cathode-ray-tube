@@ -36,11 +36,12 @@
 #     stock: cannot even resolve snprintf from :DEFAULT, because dlsym(0, ...)
 #            is not the global scope on Darwin
 #
-# Those two are the whole of what a Lisp-side replacement for vendor/shim would
-# need on this implementation, and the first is what the objc bindings need to
-# run on ECL at all (see objc/src/abi-ecl.lisp).  Testing against the ECL that
-# can do them is the point; the six minutes are cached against develop's SHA and
-# only paid when it moves.
+# Those two are the whole of what replacing the C shim needed on this
+# implementation, and it IS replaced: src/vt/vterm-abi-ecl.lisp makes both kinds
+# of crossing, so this leg exercises them on every run.  The first is also what
+# the objc bindings need to run on ECL at all (see objc/src/abi-ecl.lisp).
+#
+# The six minutes are cached against develop's SHA and only paid when it moves.
 
 name: ECL
 

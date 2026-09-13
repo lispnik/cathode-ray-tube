@@ -44,7 +44,7 @@ jobs:
       - name: Install SBCL
         run: brew install sbcl
 
-      # The vendored C library: libvterm plus the shim, built by cc.  No zig, no
+      # The vendored C library: upstream libvterm, built by cc.  No zig, no
       # cmake, no pkg-config, and nothing downloaded -- the sources are in the
       # repository, so this cannot fail because a mirror was down.
       - name: Build the vendored library

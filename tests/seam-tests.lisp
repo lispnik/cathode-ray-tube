@@ -25,13 +25,19 @@
 (defparameter +portable-files+ '("src/cli.lisp")
   "And the loose files.  The command line is arithmetic over strings.")
 
-(defparameter +seam-files+ '("ioctl-sbcl.lisp" "ioctl-ecl.lisp")
+(defparameter +seam-files+
+  '("src/pty/ioctl-sbcl.lisp"   "src/pty/ioctl-ecl.lisp"
+    "src/vt/vterm-abi-sbcl.lisp" "src/vt/vterm-abi-ecl.lisp")
   "The files that ARE allowed to name an implementation, and the only ones.
 
-A seam rather than an exception.  ioctl is variadic, CFFI cannot express that,
-and both implementations can -- differently: sb-alien splices &optional into the
-signature, ECL's dynamic FFI takes a trailing :DEFAULT n-fixed.  One function
-each, selected by the .asd, with everything that does not vary in ioctl.lisp.
+A seam rather than an exception, and a small one: four files, two pairs, each
+pair one implementation of the same contract, selected by the .asd.  Everything
+that does not vary lives beside them in ioctl.lisp and vterm-abi.lisp.
+
+What varies is what CFFI cannot express: a variadic call, and a structure passed
+by value in either direction.  sb-alien splices &optional into the signature and
+declares the structure; ECL's dynamic FFI takes a trailing :DEFAULT n-fixed and
+describes the structure as a member list.
 
 The list is checked in BOTH directions.  A file here that does not exist, or
 that no longer uses an implementation package, fails just as loudly as a file
@@ -72,6 +78,10 @@ platform and not the other, which is the whole thing this layer exists to avoid.
 
 CFFI is not here and is deliberately allowed: it is portable, it is how libvterm
 is reached at all, and it works the same on both.")
+
+(defun seam-file-names ()
+  "The bare names of +SEAM-FILES+, for comparing against a scanned file."
+  (mapcar (lambda (path) (file-namestring (pathname path))) +seam-files+))
 
 (defun code-only (text)
   "TEXT with its comments and string literals blanked out.
@@ -148,7 +158,7 @@ is exactly the thing that is true right up until someone runs it elsewhere."
 exist -- so it is not scanning what it thinks it is"
         (length files) +minimum-portable-files+)
     (dolist (file files)
-      (unless (member (file-namestring file) +seam-files+ :test #'string=)
+      (unless (member (file-namestring file) (seam-file-names) :test #'string=)
         (let ((text (code-only (uiop:read-file-string file))))
           (dolist (prefix +forbidden-prefixes+)
             (let ((at (package-reference-position text prefix)))
@@ -172,7 +182,7 @@ Both counterparts are asserted, not just this implementation's: the whole point
 of a seam is that the other side exists."
   (let ((root (asdf:system-source-directory :cathode-ray-tube/portable)))
     (dolist (name +seam-files+)
-      (let ((path (merge-pathnames (concatenate 'string "src/pty/" name) root)))
+      (let ((path (merge-pathnames name root)))
         (is-true (probe-file path)
                  "~A is exempt from the seam rule and does not exist" name)
         (when (probe-file path)

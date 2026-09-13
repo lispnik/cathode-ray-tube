@@ -55,6 +55,12 @@ red and the SBCL legs do not."
       :components ((:file "cells")
                    (:file "protocol")
                    (:file "ffi")
+                   ;; The by-value crossings, which CFFI cannot express in
+                   ;; either direction.  VTERM-ABI declares what the two seams
+                   ;; share and must come first.
+                   (:file "vterm-abi")
+                   #+sbcl (:file "vterm-abi-sbcl")
+                   #+ecl (:file "vterm-abi-ecl")
                    (:file "libvterm")))
      (:module "pty"
       :serial t
@@ -65,6 +71,7 @@ red and the SBCL legs do not."
                    #+sbcl (:file "ioctl-sbcl")
                    #+ecl (:file "ioctl-ecl")
                    (:file "ioctl")
+                   (:file "errno")
                    (:file "pty")
                    (:file "shell")))
      (:module "terminal"

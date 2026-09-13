@@ -1,4 +1,4 @@
-;;;; src/vt/ffi.lisp -- libvterm, through vendor/shim.
+;;;; src/vt/ffi.lisp -- libvterm, the parts CFFI can reach directly.
 ;;;;
 ;;;; Only what we use.  Not generated: of libvterm's surface we need about
 ;;;; thirty entry points, and hand-writing them is an afternoon while a
@@ -6,8 +6,9 @@
 ;;;; the discipline objc explicitly rejects and this project inherits.
 ;;;;
 ;;;; Reading a structure THROUGH A POINTER is fine in CFFI, so VTermScreenCell
-;;;; arrives here unchanged and is decoded with DEFCSTRUCT.  Only crossings BY
-;;;; VALUE need the shim, and those are the crt_* entry points below.
+;;;; arrives here unchanged and is decoded with DEFCSTRUCT.  Crossings BY VALUE
+;;;; are the ones CFFI cannot express at all, and they live in vterm-abi.lisp
+;;;; and its two seams -- there is no C left in the middle.
 
 (in-package #:cathode-ray-tube.vt)
 
@@ -122,21 +123,8 @@ theoretical one on a terminal whose fonts are IBM VGA 8x16 and Commodore PET.")
 (cffi:defcfun ("vterm_mouse_button" %vterm-mouse-button) :void
   (vt :pointer) (button :int) (pressed :bool) (mod :int))
 
-;;; The shim's flattened entry points -----------------------------------------
+;;; The one call whose table we build ourselves ------------------------------
 
-(cffi:defcstruct crt-screen-callbacks
-  (damage :pointer) (moverect :pointer) (movecursor :pointer)
-  (settermprop :pointer) (bell :pointer) (resize :pointer)
-  (sb-pushline :pointer) (sb-popline :pointer) (sb-clear :pointer))
 
-(cffi:defcfun ("crt_screen_set_callbacks" %crt-screen-set-callbacks) :pointer
-  (screen :pointer) (cbs :pointer) (user :pointer))
-(cffi:defcfun ("crt_screen_context_free" %crt-screen-context-free) :void
-  (ctx :pointer))
-(cffi:defcfun ("crt_screen_get_row" %crt-screen-get-row) :int
-  (screen :pointer) (row :int) (cols :int) (cells :pointer))
-(cffi:defcfun ("crt_screen_get_cell" %crt-screen-get-cell) :int
-  (screen :pointer) (row :int) (col :int) (cell :pointer))
-(cffi:defcfun ("crt_screen_get_text" %crt-screen-get-text) :unsigned-long
-  (screen :pointer) (str :pointer) (len :unsigned-long)
-  (start-row :int) (end-row :int) (start-col :int) (end-col :int))
+(cffi:defcfun ("vterm_screen_set_callbacks" %vterm-screen-set-callbacks) :void
+  (screen :pointer) (callbacks :pointer) (user :pointer))
