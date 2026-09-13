@@ -25,7 +25,12 @@ CFLAGS += -I$(VTERM)/include -I$(VTERM)/src -I$(SHIM) -DHAVE_STDBOOL_H
 # Deployment target pinned so the dylib loads on the oldest OS the app claims.
 # CADisplayLink puts our floor at macOS 14; keep the two in step.
 CFLAGS += -mmacosx-version-min=14.0
-LDFLAGS += -dynamiclib -install_name @rpath/lib$(NAME).dylib \
+# A BARE install_name, not @rpath.  Nothing links this library -- CFFI dlopen's
+# it by name from a directory it was told about -- so @rpath would be a promise
+# no binary keeps, and asdf-macos-app says so: "references @rpath/libcathode.dylib
+# but no LC_RPATH resolves it".  A bare name is what a dlopen-only library
+# should carry.
+LDFLAGS += -dynamiclib -install_name lib$(NAME).dylib \
            -mmacosx-version-min=14.0 -compatibility_version 1.0 -current_version 1.0
 
 SOURCES = $(wildcard $(VTERM)/src/*.c) $(SHIM)/crt_shim.c
