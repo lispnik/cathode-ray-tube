@@ -121,6 +121,14 @@ failure is about this program rather than about what a shell builtin does with a
 controlling terminal, which is a distinction this suite has already had to make
 once (see A-SIGNALLED-CHILD-REPORTS-128-PLUS-THE-SIGNAL).
 
+ONE line, and it must stay one line.  Measured: tr answers the first line sent
+to it through a pty and then never answers another -- so does `sed -u', while cat
+and a `while read' loop answer every line.  It is tr's own stdio buffering and
+nothing to do with this program, but a second synthesized line here would never
+arrive and the failure would look exactly like a bug in the keyboard path.
+A-COLLECTION-MUST-NOT-KILL-THE-TERMINAL needs two lines and uses a shell for
+that reason.
+
 Every step says which one it was.  A blank screen is the same picture whether
 AppKit declined to build the event, the event arrived nowhere, or the child was
 never there to receive it, and on a CI runner you get one line to tell them

@@ -148,6 +148,7 @@
   (:export
    #:pty #:pty-p #:pty-fd #:pty-pid #:pty-alive-p
    #:spawn-pty #:pty-close #:pty-read #:pty-write #:pty-reap #:pty-wait
+   #:interrupted-p
    #:set-winsize #:get-winsize
    #:default-shell #:login-shell-arguments #:shell-command #:child-environment))
 

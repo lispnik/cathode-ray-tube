@@ -169,31 +169,49 @@ COMMAND defaults to the user's login shell."
                ;; asked to stop between polls does not sit here until the child
                ;; happens to say something.
                (let ((ready (%poll fds 2 250)))
-                 (when (minusp ready) (return))
-                 (let ((master-events (cffi:foreign-slot-value
-                                       (cffi:mem-aptr fds '(:struct pollfd) 0)
-                                       '(:struct pollfd) 'revents))
-                       (wake-events (cffi:foreign-slot-value
-                                     (cffi:mem-aptr fds '(:struct pollfd) 1)
-                                     '(:struct pollfd) 'revents)))
-                   (when (logtest wake-events +pollin+)
-                     ;; Drain the pipe; its only content is "look at the queue".
-                     (%read wake buffer 4096))
-                   (when (logtest master-events +pollin+)
-                     (unless (drain-pty terminal buffer 65536) (return)))
-                   ;; HUP or ERR means the child has gone.  Read once more
-                   ;; first: the last output and the hangup arrive together, and
-                   ;; returning here would lose it.
-                   (when (logtest master-events (logior +pollhup+ +pollerr+ +pollnval+))
-                     (drain-pty terminal buffer 65536)
-                     (return))))
+                 (cond
+                   ;; A poll the COLLECTOR interrupted is not an error and says
+                   ;; nothing about the child: SBCL stops the world by signalling
+                   ;; every other thread, and a thread sitting in poll() comes
+                   ;; back -1/EINTR when that happens.  Ending the loop here is
+                   ;; what left a terminal dead with its child still running --
+                   ;; pid valid, master open, reader alive -- on a CI runner and
+                   ;; never on this desk, because it depends on when a collection
+                   ;; lands.  Go round again.
+                   ((and (minusp ready) (pty:interrupted-p)))
+                   ((minusp ready) (return))
+                   (t
+                    (let ((master-events (cffi:foreign-slot-value
+                                          (cffi:mem-aptr fds '(:struct pollfd) 0)
+                                          '(:struct pollfd) 'revents))
+                          (wake-events (cffi:foreign-slot-value
+                                        (cffi:mem-aptr fds '(:struct pollfd) 1)
+                                        '(:struct pollfd) 'revents)))
+                      (when (logtest wake-events +pollin+)
+                        ;; Drain the pipe; its only content is "look at the
+                        ;; queue".
+                        (%read wake buffer 4096))
+                      (when (logtest master-events +pollin+)
+                        (unless (drain-pty terminal buffer 65536) (return)))
+                      ;; HUP or ERR means the child has gone.  Read once more
+                      ;; first: the last output and the hangup arrive together,
+                      ;; and returning here would lose it.
+                      (when (logtest master-events
+                                     (logior +pollhup+ +pollerr+ +pollnval+))
+                        (drain-pty terminal buffer 65536)
+                        (return))))))
                (flush-outbound terminal))))
       (finish-terminal terminal))))
 
 (defun drain-pty (terminal buffer size)
-  "Read what is available and feed it to the screen.  NIL when the child is gone."
+  "Read what is available and feed it to the screen.
+
+T to keep going, NIL when the child is gone.  An INTERRUPTED read is `keep
+going': it says nothing about the child, and reading it as the end of one is
+what made a terminal die with its child still running."
   (let ((n (pty:pty-read (terminal-pty terminal) buffer size)))
     (cond
+      ((eq n :again) t)
       ((plusp n)
        (let ((octets (make-array n :element-type '(unsigned-byte 8))))
          (dotimes (i n) (setf (aref octets i) (cffi:mem-aref buffer :uint8 i)))

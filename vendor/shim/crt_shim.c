@@ -2,6 +2,7 @@
 
 #include "crt_shim.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -198,3 +199,23 @@ int crt_get_winsize(int fd, int *rows, int *cols)
   }
   return rc;
 }
+
+/* --- errno, read from the system headers rather than remembered ------------ */
+/*
+ * A blocking read() or poll() that a signal interrupts returns -1 and sets
+ * errno to EINTR, and SBCL's garbage collector signals every thread it stops.
+ * So the reader thread's poll comes back negative for reasons that have nothing
+ * to do with the child, and a loop that reads "negative" as "the child is gone"
+ * ends whenever a collection happens to land on it.  That is timing-dependent
+ * and machine-dependent, and it presented as a terminal that had died with its
+ * child still running, on a CI runner and never on a desk.
+ *
+ * Telling EINTR from a real error means reading errno, and these four functions
+ * are how: the VALUES come from <errno.h> at compile time, so nothing here is a
+ * number anybody typed.  Same reasoning as tools/metal-constants.sh.
+ */
+
+int crt_errno(void)   { return errno; }
+int crt_eintr(void)   { return EINTR; }
+int crt_eagain(void)  { return EAGAIN; }
+int crt_eio(void)     { return EIO; }

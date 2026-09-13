@@ -198,15 +198,55 @@ Returns a PTY, or signals.  The child execve's and never returns to Lisp."
 (defun pty-alive-p (pty)
   (and pty (> (pty-pid pty) 0) (null (pty-exit-status pty))))
 
+(cffi:defcfun ("crt_errno" %errno) :int)
+(cffi:defcfun ("crt_eintr" %eintr) :int)
+(cffi:defcfun ("crt_eagain" %eagain) :int)
+(cffi:defcfun ("crt_eio" %eio) :int)
+
+(defun interrupted-p ()
+  "True when the call that just failed was INTERRUPTED rather than broken.
+
+EINTR, or EAGAIN on a descriptor someone has made non-blocking.  Neither says
+anything about the child, and both are routine: SBCL's collector stops the world
+by signalling every other thread, and a thread sitting in a blocking poll() or
+read() comes back -1/EINTR when that happens.
+
+A reader loop that treated a negative return as `the child is gone' therefore
+ended whenever a collection landed on it, leaving a terminal that had died with
+its child still running -- pid valid, master open, reader thread alive.  It
+depends on when the collector runs, so it never happened here and happened
+regularly on a CI runner."
+  (let ((e (%errno)))
+    (or (= e (%eintr)) (= e (%eagain)))))
+
 (defun pty-read (pty buffer count)
   "read(2) up to COUNT bytes into the foreign BUFFER.
 
-Returns the count, 0 at end of file, or negative on error.  A pty master reports
-EIO rather than EOF when the child goes, which is normal and not a problem."
-  (%read (pty-fd pty) buffer count))
+Returns the count, 0 at end of file, :AGAIN when the call was interrupted, or a
+negative number on a real error.  A pty master reports EIO rather than EOF when
+the child goes, which is normal and not a problem.
+
+:AGAIN rather than a negative number, because the whole bug this distinguishes
+was one caller reading `negative' as `finished'.  A keyword cannot be compared
+with ZEROP or MINUSP by accident."
+  (let ((n (%read (pty-fd pty) buffer count)))
+    (if (and (minusp n) (interrupted-p)) :again n)))
 
 (defun pty-write (pty octets &key (start 0) end)
-  "Write OCTETS to the child.  Returns the number of bytes written.
+  "Write OCTETS to the child.  Returns the number of bytes actually written.
+
+LOOPS until everything is gone, and that is the whole point of this function
+rather than an optimisation.  write(2) is permitted to write FEWER bytes than it
+was given and return that count, and it returns -1/EINTR when a signal arrives
+mid-call -- and SBCL's collector signals every thread it stops.  A version that
+called write once and returned what it got DROPPED the remainder silently.
+
+The symptom was as good as invisible and as bad as it sounds: type a line, and
+sometimes the newline at the end of it is the byte that goes missing.  The child
+sits waiting for the rest of a line that will never arrive, the echo on screen
+shows exactly what was typed because the TTY echoed the part that did get
+through, and the terminal looks like it has hung.  Caught by a test that forced
+collections while typing; the screen read `second' with no newline after it.
 
 Only the thread that owns the fd should call this: a pty master write BLOCKS
 when the child is not reading, so calling it from the UI thread is a hang
@@ -218,8 +258,20 @@ waiting for a slow program."
         (cffi:with-foreign-object (buffer :uint8 count)
           (loop for i from 0 below count
                 do (setf (cffi:mem-aref buffer :uint8 i) (aref octets (+ start i))))
-          (let ((written (%write (pty-fd pty) buffer count)))
-            (max 0 written))))))
+          (loop with written = 0
+                while (< written count)
+                do (let ((n (%write (pty-fd pty)
+                                    (cffi:inc-pointer buffer written)
+                                    (- count written))))
+                     (cond ((plusp n) (incf written n))
+                           ;; Interrupted, or the child is not reading and the
+                           ;; descriptor is non-blocking: neither has lost
+                           ;; anything, so try the rest again.
+                           ((and (minusp n) (interrupted-p)))
+                           ;; A real error, or a zero-byte write that is going
+                           ;; nowhere.  Stop, and report what did get through.
+                           (t (return written))))
+                finally (return written))))))
 
 (defun pty-reap (pty)
   "Non-blocking waitpid.  Returns the exit status if the child has gone.

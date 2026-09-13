@@ -104,6 +104,18 @@ int crt_set_winsize(int fd, int rows, int cols);
 /* The other direction, for completeness -- the kernel's idea of the size. */
 int crt_get_winsize(int fd, int *rows, int *cols);
 
+/* errno, and the three values the reader loop has to tell apart.
+ *
+ * A blocking read() or poll() interrupted by a signal returns -1 with errno
+ * EINTR, and SBCL's collector signals every thread it stops -- so a reader loop
+ * that treats a negative return as "the child is gone" ends whenever a
+ * collection lands on it.  The values come from <errno.h> at compile time
+ * rather than from anybody's memory. */
+int crt_errno(void);
+int crt_eintr(void);
+int crt_eagain(void);
+int crt_eio(void);
+
 #ifdef __cplusplus
 }
 #endif

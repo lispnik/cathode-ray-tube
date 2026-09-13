@@ -12,6 +12,18 @@
       (when (> (get-internal-real-time) deadline) (return nil))
       (sleep interval))))
 
+(defun force-collection ()
+  "A full garbage collection, on whichever implementation this is.
+
+The only read-time conditional in the portable suite, and confined to one
+function on purpose.  What the test below needs is a collection that really
+STOPS THE WORLD -- that is the thing that signals the reader thread -- and there
+is no portable way to ask for one.  A nursery sweep may not signal at all, which
+is why both branches ask for a full collection rather than whatever is cheapest."
+  #+sbcl (sb-ext:gc :full t)
+  #+ecl (ext:gc t)
+  #-(or sbcl ecl) nil)
+
 (defun screen-text (terminal)
   "The whole screen as one string, for searching."
   (crt.terminal:with-terminal-locked (terminal)
@@ -181,3 +193,40 @@ smaller place to look."
     (crt.terminal:terminal-send-string term (format nil "hi~%"))
     (is-true (wait-until (lambda () (search "HI" (screen-text term))))
              "tr never answered; screen was ~S" (screen-text term))))
+
+(test a-collection-must-not-kill-the-terminal
+  "The reader thread survives the garbage collector.
+
+SBCL stops the world by SIGNALLING every other thread, so a reader sitting in a
+blocking poll() or read() comes back -1 with errno EINTR.  That is not an error
+and says nothing about the child -- but a loop that reads `negative' as `the
+child is gone' ends there, leaving a terminal that has died with its child still
+running: pid valid, master open, reader thread alive, nothing on screen ever
+again.
+
+A shell loop rather than `tr', and the difference is not incidental.  Measured
+here: tr and `sed -u' both answer the FIRST line sent to them through a pty and
+then never answer another, which is their own stdio buffering and nothing to do
+with this program -- cat and a `while read' loop both answer every line.  A test
+built on tr fails for that reason alone, and I wrote one before checking, then
+spent an hour reading it as a bug in the pty layer.  Two lines is the minimum
+that tells the difference, so the child has to be one that can manage two.
+
+The marker matters too: GOT[...] cannot be the pty echoing back what was typed,
+which is what a test looking for its own input would accept."
+  (with-terminal (term :rows 24 :cols 80
+                       :command '("/bin/sh" "-c"
+                                  "while read l; do printf 'GOT[%s]' \"$l\"; done"))
+    (crt.terminal:terminal-send-string term (format nil "first~%"))
+    (is-true (wait-until (lambda () (search "GOT[first]" (screen-text term))))
+             "the child must answer before the collections start; screen was ~S"
+             (screen-text term))
+    (dotimes (i 8)
+      (force-collection)
+      (sleep 0.03))
+    (is-true (crt.terminal:terminal-alive-p term)
+             "the terminal must have survived: exit status ~S"
+             (crt.terminal:terminal-exit-status term))
+    (crt.terminal:terminal-send-string term (format nil "second~%"))
+    (is-true (wait-until (lambda () (search "GOT[second]" (screen-text term))))
+             "and must still be listening; screen was ~S" (screen-text term))))
