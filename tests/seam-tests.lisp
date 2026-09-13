@@ -25,6 +25,19 @@
 (defparameter +portable-files+ '("src/cli.lisp")
   "And the loose files.  The command line is arithmetic over strings.")
 
+(defparameter +seam-files+ '("ioctl-sbcl.lisp" "ioctl-ecl.lisp")
+  "The files that ARE allowed to name an implementation, and the only ones.
+
+A seam rather than an exception.  ioctl is variadic, CFFI cannot express that,
+and both implementations can -- differently: sb-alien splices &optional into the
+signature, ECL's dynamic FFI takes a trailing :DEFAULT n-fixed.  One function
+each, selected by the .asd, with everything that does not vary in ioctl.lisp.
+
+The list is checked in BOTH directions.  A file here that does not exist, or
+that no longer uses an implementation package, fails just as loudly as a file
+outside it that does -- otherwise this degrades into a list of things nobody
+looks at, which is how an exemption becomes a hole.")
+
 (defconstant +minimum-portable-files+ 15
   "A FLOOR under the count, asserted before anything else.
 
@@ -135,14 +148,40 @@ is exactly the thing that is true right up until someone runs it elsewhere."
 exist -- so it is not scanning what it thinks it is"
         (length files) +minimum-portable-files+)
     (dolist (file files)
-      (let ((text (code-only (uiop:read-file-string file))))
-        (dolist (prefix +forbidden-prefixes+)
-          (let ((at (package-reference-position text prefix)))
-            (is-false at
-                      "~A uses ~A, which would make the portable half load on
-one implementation and not the other.  If it is genuinely needed, the code
-belongs above the seam -- in CRT.UI, CRT.METAL or CRT.TEXT."
-                      (file-namestring file) prefix)))))))
+      (unless (member (file-namestring file) +seam-files+ :test #'string=)
+        (let ((text (code-only (uiop:read-file-string file))))
+          (dolist (prefix +forbidden-prefixes+)
+            (let ((at (package-reference-position text prefix)))
+              (is-false at
+                        "~A uses ~A, which would make the portable half load on
+one implementation and not the other.  If it is genuinely needed, it belongs
+above the seam -- in CRT.UI, CRT.METAL or CRT.TEXT -- or in a SEAM FILE with a
+counterpart for the other implementation, as src/pty/ioctl-sbcl.lisp has."
+                        (file-namestring file) prefix))))))))
+
+(test every-seam-file-exists-and-earns-its-exemption
+  "The exemption list, checked in the direction that rots.
+
+A file may be exempt from THE-PORTABLE-HALF-HAS-NO-IMPLEMENTATION-SPECIFIC-CODE
+only while it is really there and really is a seam.  Without this, deleting
+ioctl-ecl.lisp or rewriting it portably would leave a name in a list that
+nothing consults -- and the next file to be added under that name would inherit
+an exemption nobody granted it.
+
+Both counterparts are asserted, not just this implementation's: the whole point
+of a seam is that the other side exists."
+  (let ((root (asdf:system-source-directory :cathode-ray-tube/portable)))
+    (dolist (name +seam-files+)
+      (let ((path (merge-pathnames (concatenate 'string "src/pty/" name) root)))
+        (is-true (probe-file path)
+                 "~A is exempt from the seam rule and does not exist" name)
+        (when (probe-file path)
+          (let ((text (code-only (uiop:read-file-string path))))
+            (is-true (some (lambda (prefix) (package-reference-position text prefix))
+                           +forbidden-prefixes+)
+                     "~A is exempt from the seam rule and does not need to be:
+it names no implementation-specific package, so it should be scanned like
+everything else" name)))))))
 
 (test the-portable-half-has-no-read-time-conditionals
   "#+sbcl below the seam is the same problem wearing a different hat: it makes

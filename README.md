@@ -40,9 +40,12 @@ is free of Objective-C and is tested on both. `make app` builds a bundle and
 
 ### ECL
 
-The lower half builds and passes on stock ECL, but CI tests against
-[lispnik/ecl](https://github.com/lispnik/ecl)'s `develop` — a fork with two
-fixes to the dynamic FFI that stock does not have. Measured on arm64:
+ECL support **requires** [lispnik/ecl](https://github.com/lispnik/ecl)'s
+`develop`. Not a preference — stock ECL fails two tests outright, because
+`src/pty/ioctl-ecl.lisp` makes a variadic call through the dynamic FFI and stock
+cannot. It signals rather than misbehaving, which is the right way round.
+
+The fork carries two fixes stock does not have. Measured on arm64:
 
 | | fork | stock |
 |---|---|---|
@@ -55,12 +58,20 @@ the [`objc`](https://github.com/lispnik/objc) bindings need the fork to run on
 ECL at all.
 
 Between them those two are the whole of what a Lisp-side replacement for
-`vendor/shim/` would need on this implementation. That replacement is not taken
-— see the header of `vendor/shim/crt_shim.h` for the measurements and the
-reasoning — but the ECL that could do it is the one worth testing against. CI
-builds it from source, cached against `develop`'s SHA, and asserts it really is
-the fork before running anything: the suite passes on stock too, so a silent
-fallback would be green having tested nothing new.
+`vendor/shim/` needs. The first piece of that replacement has landed:
+`crt_set_winsize` and `crt_get_winsize` are gone, and `src/pty/ioctl.lisp`
+calls `ioctl` directly — `sb-alien` splicing `&optional` into the signature on
+SBCL, `si:call-cfun` with a trailing `:default 2` on ECL. The request numbers
+are *derived* from `<sys/ioccom.h>`'s `_IOC` rather than written down, and
+asserted against a live pty.
+
+The rest of the shim stays, and the header of `vendor/shim/crt_shim.h` has the
+measurements and the reasoning.
+
+CI builds the fork from source, cached against `develop`'s SHA, and asserts it
+really is the fork before running anything — so a silent fallback to Homebrew's
+ECL fails at that step with a clear message instead of two puzzling errors
+several minutes later.
 
 Two things are deliberately not claimed as parity. **Bloom** is close rather than
 identical: Qt's `FastBlur` is an undisclosed multi-pass box approximation with no

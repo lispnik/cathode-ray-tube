@@ -395,8 +395,9 @@ them in v0-v3 as the homogeneous float aggregate they are."
 (cffi:defcfun ("crt_screen_context_free" %crt-context-free) :void (ctx :pointer))
 (cffi:defcfun ("crt_screen_get_row" %crt-get-row) :int
   (screen :pointer) (row :int) (cols :int) (cells :pointer))
-(cffi:defcfun ("crt_set_winsize" %crt-set-winsize) :int
-  (fd :int) (rows :int) (cols :int))
+;; The window size no longer goes through the shim: ioctl is variadic and
+;; sb-alien can say so.  See src/pty/ioctl.lisp.  This probe calls what the
+;; program calls, which is the only way it stays a probe of anything.
 
 ;;; VTermScreenCell, measured with a C program rather than guessed: 40 bytes,
 ;;; and `width' sits at 24 but the next member starts at 28 because the bitfield
@@ -569,8 +570,8 @@ them in v0-v3 as the homogeneous float aggregate they are."
           (t
            (report t "forkpty -> pid ~D" pid)
            (let ((fd (cffi:mem-ref amaster :int)))
-             (report (zerop (%crt-set-winsize fd 30 100))
-                     "crt_set_winsize(fd, 30, 100)")
+             (report (crt.pty:set-winsize fd 30 100)
+                     "crt.pty:set-winsize(fd, 30, 100) -- variadic ioctl, in Lisp")
              ;; Release the child, then read what stty saw.
              (cffi:with-foreign-string (nl (format nil "~%"))
                (cffi:foreign-funcall "write" :int fd :pointer nl

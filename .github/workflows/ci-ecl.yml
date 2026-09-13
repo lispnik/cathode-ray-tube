@@ -18,13 +18,14 @@
 # rather than a function -- and a profile test reaching into CRT.TEXT, which is
 # not portable at all.  Neither is visible from the SBCL legs.
 #
-# WHICH ECL, and why it is the fork.  This leg builds lispnik/ecl's develop
-# rather than installing Homebrew's, and the reason is not that the suite needs
-# it -- the portable half passes on stock ECL, which is exactly what makes the
-# choice worth writing down.
+# WHICH ECL, and why it MUST be the fork.  This leg builds lispnik/ecl's develop
+# rather than installing Homebrew's, and as of src/pty/ioctl-ecl.lisp that is a
+# requirement rather than a preference: stock ECL fails WINSIZE-REACHES-THE-CHILD
+# and WINSIZE-ROUND-TRIPS outright, with SI:SIMPLE-PROGRAM-ERROR.  It signals
+# rather than misbehaving, which is the right way round.
 #
-# The fork is the ECL this project targets, and it carries two fixes to the
-# DYNAMIC FFI that stock does not have.  Both were measured here, on arm64:
+# The fork carries two fixes to the DYNAMIC FFI that stock does not have.  Both
+# were measured here, on arm64:
 #
 #   a four-int structure passed BY VALUE into a libffi closure
 #     fork:  the callback receives (3 7 11 19)
@@ -93,11 +94,17 @@ jobs:
           echo "$HOME/.local/ecl/bin" >> "$GITHUB_PATH"
           "$HOME/.local/ecl/bin/ecl" --version
 
-      # LOAD-BEARING, and the reason is the same one objc's safepoint workflow
-      # records about its own verification step: the portable suite passes on
-      # STOCK ECL too, so a run that silently fell back to Homebrew's would be
-      # green having tested nothing new.  These two probes are exactly what the
-      # fork adds and stock refuses, measured on both before being written down:
+      # A CLEAR ERROR AT THE RIGHT MOMENT.  Since ioctl-ecl.lisp landed, a run
+      # that fell back to Homebrew's ECL would fail anyway -- but several minutes
+      # later, in two pty tests, with a SI:SIMPLE-PROGRAM-ERROR that names
+      # neither the fork nor the reason.  This says it here, in one line.
+      #
+      # It was load-bearing for a different reason before that, and the reason is
+      # worth keeping in mind for the next exemption: the suite USED to pass on
+      # stock, so a silent fallback was green having tested nothing new.
+      #
+      # These two probes are exactly what the fork adds and stock refuses,
+      # measured on both before being written down:
       #
       #   a structure through the dynamic FFI  -- stock: "does not denote an
       #     elementary foreign type"

@@ -58,7 +58,14 @@ red and the SBCL legs do not."
                    (:file "libvterm")))
      (:module "pty"
       :serial t
-      :components ((:file "pty")
+      :components (;; The implementation seam, and the only one below the
+                   ;; seam-test's line: ioctl is variadic, CFFI cannot express
+                   ;; that, and the two implementations can -- differently.
+                   ;; ioctl.lisp holds everything that does not vary.
+                   #+sbcl (:file "ioctl-sbcl")
+                   #+ecl (:file "ioctl-ecl")
+                   (:file "ioctl")
+                   (:file "pty")
                    (:file "shell")))
      (:module "terminal"
       :serial t

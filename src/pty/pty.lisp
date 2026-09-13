@@ -36,14 +36,8 @@
 (cffi:defcfun ("pipe" %pipe) :int (fds :pointer))
 (cffi:defcfun ("fcntl" %fcntl) :int (fd :int) (cmd :int) (arg :int))
 
-;;; The shim's non-variadic ioctl.  See vendor/shim/crt_shim.h: a plain
-;;; cffi:foreign-funcall of ioctl(TIOCSWINSZ) returns -1 on Apple arm64, because
-;;; ioctl is variadic and a variadic argument goes on the stack while a
-;;; fixed-arity call passes it in a register.
-(cffi:defcfun ("crt_set_winsize" %crt-set-winsize) :int
-  (fd :int) (rows :int) (cols :int))
-(cffi:defcfun ("crt_get_winsize" %crt-get-winsize) :int
-  (fd :int) (rows :pointer) (cols :pointer))
+;;; The window size lives in ioctl.lisp: ioctl is variadic, which CFFI cannot
+;;; express, so the call itself is the one thing that varies by implementation.
 
 (defconstant +sighup+ 1)
 (defconstant +sigterm+ 15)
@@ -140,19 +134,6 @@ to do with locales."
 
 (defmacro with-pty-locked ((pty) &body body)
   `(bt2:with-lock-held ((pty-lock ,pty)) ,@body))
-
-(defun set-winsize (fd rows cols)
-  "Tell the kernel the pty is ROWS by COLS, which sends the child SIGWINCH.
-
-Through the shim, not through ioctl directly -- see the note on the defcfun."
-  (when (and fd (>= fd 0) (plusp rows) (plusp cols))
-    (zerop (%crt-set-winsize fd rows cols))))
-
-(defun get-winsize (fd)
-  "(values ROWS COLS) as the kernel has them, or NIL."
-  (cffi:with-foreign-objects ((rows :int) (cols :int))
-    (when (zerop (%crt-get-winsize fd rows cols))
-      (values (cffi:mem-ref rows :int) (cffi:mem-ref cols :int)))))
 
 (defun set-nonblocking (fd)
   (let ((flags (%fcntl fd +f-getfl+ 0)))

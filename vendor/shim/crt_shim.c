@@ -174,32 +174,6 @@ size_t crt_screen_get_text(const VTermScreen *screen, char *str, size_t len,
   return vterm_screen_get_text(screen, str, len, rect);
 }
 
-/* --- the pty window size -------------------------------------------------- */
-
-int crt_set_winsize(int fd, int rows, int cols)
-{
-  struct winsize ws;
-
-  memset(&ws, 0, sizeof(ws));
-  ws.ws_row = (unsigned short)rows;
-  ws.ws_col = (unsigned short)cols;
-  return ioctl(fd, TIOCSWINSZ, &ws);
-}
-
-int crt_get_winsize(int fd, int *rows, int *cols)
-{
-  struct winsize ws;
-  int rc;
-
-  memset(&ws, 0, sizeof(ws));
-  rc = ioctl(fd, TIOCGWINSZ, &ws);
-  if (rc == 0) {
-    if (rows) *rows = ws.ws_row;
-    if (cols) *cols = ws.ws_col;
-  }
-  return rc;
-}
-
 /* --- errno, read from the system headers rather than remembered ------------ */
 /*
  * A blocking read() or poll() that a signal interrupts returns -1 and sets
