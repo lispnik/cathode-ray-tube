@@ -103,7 +103,17 @@ so a buffer already committed has nothing left to attach it to."
                    (objc:invoke ,encoder "setViewport:" vp))))
          (unwind-protect (progn ,@body)
            (objc:invoke ,encoder "endEncoding"))
-         ,@(when present `((objc:invoke ,cb "presentDrawable:" ,present)))
+         ;; Checked at RUNTIME, not at macroexpansion.  PRESENT is a FORM, and
+         ;; a form is always non-nil at expansion time even when its value will
+         ;; be NIL -- so testing it in the macro emits the call unconditionally
+         ;; and -presentDrawable: gets a null drawable.  That is not a Lisp
+         ;; error but an Objective-C assertion, which aborts the process:
+         ;; "failed assertion `drawable must not be nil'", no condition, no
+         ;; backtrace worth reading.
+         ,@(when present
+             `((let ((drawable ,present))
+                 (when (and drawable (not (null-object-p drawable)))
+                   (objc:invoke ,cb "presentDrawable:" drawable)))))
          (when ,own
            (objc:invoke ,cb "commit")
            (objc:invoke ,cb "waitUntilCompleted"))

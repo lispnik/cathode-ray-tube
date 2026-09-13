@@ -63,12 +63,17 @@ and terminal emulation by a vendored libvterm."
                    (:file "device")
                    (:file "resources")
                    (:file "library")
-                   (:file "pass")))
+                   (:file "pass")
+                   (:file "uniforms")))
      (:module "text"
       :serial t
       :components ((:file "font")
                    (:file "atlas")
                    (:file "pass")))
+     (:module "effects"
+      :serial t
+      :components ((:file "uniforms")
+                   (:file "graph")))
      (:module "ui"
       :serial t
       :components ((:file "frameworks")
@@ -96,6 +101,7 @@ and terminal emulation by a vendored libvterm."
                  (:file "terminal-tests")
                  (:file "metal-tests")
                  (:file "text-tests")
+                 (:file "effects-tests")
                  (:file "ui-tests"))))
   ;; FIVEAM:RUN! prints failures and returns NIL, and ASDF discards what a
   ;; TEST-OP returns -- which is exactly how a suite goes green with failing

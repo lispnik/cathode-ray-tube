@@ -11,12 +11,15 @@ application replaced by Cocoa driven from Lisp through the
 [`objc`](https://github.com/lispnik/objc) bindings, and the terminal emulation
 supplied by a vendored [libvterm](https://www.leonerd.org.uk/code/libvterm/).
 
-**Status: it is a terminal.** `make run` opens a window, runs your shell, and
-draws it with a CoreText glyph atlas at vsync — colour, bold, underline, reverse
-video, wide characters, scrollback and resize all work. The CRT effects are the
-next milestone; today it renders plain white-on-black.
+**Status: it looks like a cathode-ray tube.** `make run` opens a window, runs
+your shell, and draws it through the full effect chain — phosphor burn-in,
+bloom, scanlines, barrel distortion, chroma tint, jitter, horizontal-sync
+tearing and a procedural bezel — under any of the fourteen ported profiles.
 
-`make test` is 181 checks.
+![Default Amber](docs/gallery/default-amber.png)
+
+`make test` is 340 checks. Still to come: the font manager, a settings window,
+and the signed installer.
 
 ## Building
 

@@ -14,9 +14,14 @@
 
 (defstruct (session (:constructor %make-session))
   window view terminal renderer font
+  graph profile
   (sampler nil)
   (margin 8.0 :type single-float)
-  (title nil))
+  (title nil)
+  ;; With no effects the text target is blitted straight to the drawable.  Not
+  ;; scaffolding: it is the honest "effects off" path, and it is what the
+  ;; Boring profile amounts to.
+  (effects t))
 
 (defvar *sessions* '())
 
@@ -36,6 +41,8 @@ them in that order and separately."
     (destructuring-bind (width height) (view-drawable-size view)
       (multiple-value-bind (cols rows) (crt.text:resize-text-renderer renderer width height)
         (crt.terminal:terminal-resize (session-terminal session) rows cols)
+        (when (session-graph session)
+          (crt.effects:resize-graph (session-graph session) width height))
         (values cols rows)))))
 
 ;;; The frame -------------------------------------------------------------------
@@ -60,8 +67,28 @@ them in that order and separately."
       (let* ((terminal (session-terminal session))
              (snapshot (crt.terminal:terminal-snapshot terminal))
              (renderer (session-renderer session))
-             (target (crt.text:render-text renderer snapshot)))
-        (blit-to-drawable session target texture drawable)))))
+             ;; The terminal's own colours, which the effect chain then recolours
+             ;; through convertWithChroma.  White on black is deliberate: the
+             ;; profile's foreground and background are applied in the DYNAMIC
+             ;; pass, and painting them here as well would apply them twice.
+             (target (crt.text:render-text renderer snapshot
+                                           :default-fg '(255 255 255)
+                                           :default-bg '(0 0 0))))
+        (if (and (session-effects session) (session-graph session))
+            (crt.effects:render-effects
+             (session-graph session) target texture
+             :drawable drawable
+             :time (crt.ui:view-effect-time view)
+             :painted (crt.terminal:snapshot-painted snapshot)
+             ;; The TERMINAL's pixel grid, not the drawable's.  This is what
+             ;; sets the scanline frequency; conflating it with device pixels
+             ;; is the classic way to get scanlines that are the wrong size and
+             ;; moire that moves when the window does.
+             :virtual-width (* (crt.terminal:terminal-cols terminal)
+                               (crt.text::text-renderer-cell-width renderer))
+             :virtual-height (* (crt.terminal:terminal-rows terminal)
+                                (crt.text::text-renderer-cell-height renderer)))
+            (blit-to-drawable session target texture drawable))))))
 
 (defun update-session-title (session)
   (let ((title (crt.terminal:terminal-title (session-terminal session))))
@@ -96,11 +123,15 @@ remains the honest `effects off' path."
 ;;; Starting one ------------------------------------------------------------------
 
 (defparameter *default-font* :ibm-vga-8x16
-  "Which bundled face to open with.  The font manager and the profiles replace
-this in M4; until then it is the one cool-retro-term's IBM VGA profile uses.")
+  "Which bundled face to open with.  The font manager maps a profile's fontName
+to one of these in M4; until then it is the face IBM VGA 8x16 names.")
+
+(defparameter *default-profile* "Default Amber"
+  "The profile a new window opens with -- cool-retro-term's own default.")
 
 (defun make-session (&key (width 1024) (height 640) command
-                          (font *default-font*) (title "cathode-ray-tube"))
+                          (font *default-font*) (title "cathode-ray-tube")
+                          (profile *default-profile*) (effects t))
   "A window running a shell.  Main thread only."
   (ensure-appkit)
   (let* ((loaded (crt.text::load-bundled-font font))
@@ -111,8 +142,14 @@ this in M4; until then it is the one cool-retro-term's IBM VGA profile uses.")
       (error "Could not load the bundled font ~S." font))
     (destructuring-bind (dw dh) (view-drawable-size view)
       (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh))
+             (chosen (or (crt.settings:find-profile profile)
+                         (error "No profile named ~S." profile)))
              (session (%make-session :window window :view view
-                                     :renderer renderer :font loaded)))
+                                     :renderer renderer :font loaded
+                                     :profile chosen :effects effects)))
+        (when effects
+          (setf (session-graph session)
+                (crt.effects:make-graph :profile chosen :width dw :height dh)))
         (multiple-value-bind (cols rows)
             (crt.text:text-grid-size loaded dw dh)
           (setf (session-terminal session)
@@ -139,6 +176,9 @@ this in M4; until then it is the one cool-retro-term's IBM VGA profile uses.")
   (when (session-terminal session)
     (crt.terminal:terminal-close (session-terminal session))
     (setf (session-terminal session) nil))
+  (when (session-graph session)
+    (crt.effects:release-graph (session-graph session))
+    (setf (session-graph session) nil))
   (when (session-renderer session)
     (crt.text:release-text-renderer (session-renderer session))
     (setf (session-renderer session) nil))
@@ -155,7 +195,17 @@ this in M4; until then it is the one cool-retro-term's IBM VGA profile uses.")
   (when (null *sessions*)
     (objc:invoke (objc.runloop:shared-application) "terminate:" nil)))
 
-(defun run-terminal (&key (width 1024) (height 640) command)
+(defun set-session-profile (session name)
+  "Switch profiles.  The pipelines for the new specialisation compile once."
+  (let ((profile (or (crt.settings:find-profile name)
+                     (error "No profile named ~S." name))))
+    (setf (session-profile session) profile)
+    (when (session-graph session)
+      (crt.effects::set-graph-profile (session-graph session) profile))
+    profile))
+
+(defun run-terminal (&key (width 1024) (height 640) command
+                          (profile *default-profile*) (effects t))
   "Open a terminal window and run the application.  Blocks."
   (ensure-appkit)
   (let ((app (objc.runloop:shared-application
@@ -163,5 +213,6 @@ this in M4; until then it is the one cool-retro-term's IBM VGA profile uses.")
     (setf *delegate* (make-instance 'application-delegate))
     (objc:invoke app "setDelegate:" (objc:objc-object-pointer *delegate*))
     (make-menu-bar)
-    (make-session :width width :height height :command command)
+    (make-session :width width :height height :command command
+                  :profile profile :effects effects)
     (objc.runloop:run-cocoa-application)))
