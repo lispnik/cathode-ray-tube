@@ -149,14 +149,27 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           ocicl setup
-          for attempt in 1 2 3 4 5; do
+          # EXPONENTIAL backoff, and more of them.  A fixed thirty seconds is
+          # the wrong shape for what actually goes wrong here: ghcr.io does not
+          # fail one request, it has a bad few minutes.  Measured on 13 Sep,
+          # when three consecutive runs died on "Failed to parse certificate ...
+          # Certificate serial number must be positive" and a connection reset,
+          # all five attempts inside two and a half minutes.  15s, 30s, 60s,
+          # 120s, 240s, 480s spans about sixteen minutes instead.
+          delay=15
+          ok=""
+          for attempt in 1 2 3 4 5 6 7; do
             ocicl install 2>&1 | tee ocicl-install.log
-            grep -q "failed to install" ocicl-install.log || break
-            echo "::warning::ocicl install attempt $attempt did not get every package"
-            sleep 30
+            if ! grep -q "failed to install" ocicl-install.log; then ok=yes; break; fi
+            echo "::warning::ocicl install attempt $attempt did not get every package; \
+                  retrying in ${delay}s"
+            sleep "$delay"
+            delay=$(( delay * 2 ))
           done
-          if grep -q "failed to install" ocicl-install.log; then
-            echo "::error::ocicl could not install every dependency after 5 attempts" >&2
+          if [ -z "$ok" ]; then
+            echo "::error::ocicl could not install every dependency after 7 attempts \
+                  spanning about sixteen minutes -- this is almost certainly ghcr.io \
+                  rather than this repository" >&2
             exit 1
           fi
 

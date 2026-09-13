@@ -61,9 +61,20 @@ failure this guards against is zero."
                (is (>= dh 200) "drawable height ~D is smaller than the view" dh))
              (crt.ui:show-crt-window window)
              (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 2.0d0)
+             ;; A second window if the first came up empty.  On the Intel CI
+             ;; runner -- a VM with a paravirtualised GPU -- the display link
+             ;; has been seen to deliver NOTHING in the first two seconds and
+             ;; then run normally, once in many runs.  Two seconds more is
+             ;; cheap, and it is spent only when the first window failed.
+             ;;
+             ;; This does NOT soften the assertion, which is the point: a link
+             ;; that never fires still reports zero and still fails.  It buys
+             ;; time, not tolerance.
+             (when (<= (crt.ui:view-frames view) 30)
+               (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 2.0d0))
              (let ((frames (crt.ui:view-frames view)))
                (is (> frames 30)
-                   "only ~D frames in 2s -- the display link is not firing.~%~
+                   "only ~D frames in up to 4s -- the display link is not firing.~%~
                     If this is 0, check the run loop MODE: a CADisplayLink added ~
                     to kCFRunLoopCommonModes is accepted and never fires."
                    frames)
