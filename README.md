@@ -34,9 +34,33 @@ There is a settings window (Cmd-,) with the same four tabs upstream has, tabs
 machine's own monospace families, custom profiles saved, imported and exported
 as cool-retro-term's own JSON, and the size overlay while you resize.
 
-`make test` is 755 checks on SBCL and 423 on ECL — the lower half of the program
+`make test` is 1224 checks on SBCL and 892 on ECL — the lower half of the program
 is free of Objective-C and is tested on both. `make app` builds a bundle and
 `make release` a signed, notarised disk image.
+
+### ECL
+
+The lower half builds and passes on stock ECL, but CI tests against
+[lispnik/ecl](https://github.com/lispnik/ecl)'s `develop` — a fork with two
+fixes to the dynamic FFI that stock does not have. Measured on arm64:
+
+| | fork | stock |
+|---|---|---|
+| a four-int struct **by value** into a libffi closure | receives `(3 7 11 19)` | *"does not denote an elementary foreign type"* |
+| a variadic call through `si:call-cfun` | `snprintf` gives `"The integer 42"` | cannot resolve `snprintf` from `:DEFAULT` at all |
+
+The second is the `dlsym(0, ...)` problem: on Darwin that is not the global
+scope, so CFFI's `:default` module finds nothing — not even `strlen`. It is why
+the [`objc`](https://github.com/lispnik/objc) bindings need the fork to run on
+ECL at all.
+
+Between them those two are the whole of what a Lisp-side replacement for
+`vendor/shim/` would need on this implementation. That replacement is not taken
+— see the header of `vendor/shim/crt_shim.h` for the measurements and the
+reasoning — but the ECL that could do it is the one worth testing against. CI
+builds it from source, cached against `develop`'s SHA, and asserts it really is
+the fork before running anything: the suite passes on stock too, so a silent
+fallback would be green having tested nothing new.
 
 Two things are deliberately not claimed as parity. **Bloom** is close rather than
 identical: Qt's `FastBlur` is an undisclosed multi-pass box approximation with no

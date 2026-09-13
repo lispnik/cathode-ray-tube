@@ -18,13 +18,28 @@
 # rather than a function -- and a profile test reaching into CRT.TEXT, which is
 # not portable at all.  Neither is visible from the SBCL legs.
 #
-# A STOCK ECL IS ENOUGH, and that is worth saying because it was not obvious.
-# The objc bindings need a patched ECL: `dlsym(0, ...)' is not the global scope
-# on Darwin, so CFFI's :default module resolves nothing and even strlen cannot
-# be found.  But the portable half never loads objc, and it reaches its one C
-# library through a NAMED cffi:define-foreign-library rather than :default -- so
-# Homebrew's ECL runs it.  This used to build lispnik/ecl's develop from source,
-# which cost six minutes a run to test something this leg never exercises.
+# WHICH ECL, and why it is the fork.  This leg builds lispnik/ecl's develop
+# rather than installing Homebrew's, and the reason is not that the suite needs
+# it -- the portable half passes on stock ECL, which is exactly what makes the
+# choice worth writing down.
+#
+# The fork is the ECL this project targets, and it carries two fixes to the
+# DYNAMIC FFI that stock does not have.  Both were measured here, on arm64:
+#
+#   a four-int structure passed BY VALUE into a libffi closure
+#     fork:  the callback receives (3 7 11 19)
+#     stock: "(STRUCT ...) does not denote an elementary foreign type"
+#
+#   a variadic call through si:call-cfun, with :default n-fixed
+#     fork:  snprintf gives "The integer 42"
+#     stock: cannot even resolve snprintf from :DEFAULT, because dlsym(0, ...)
+#            is not the global scope on Darwin
+#
+# Those two are the whole of what a Lisp-side replacement for vendor/shim would
+# need on this implementation, and the first is what the objc bindings need to
+# run on ECL at all (see objc/src/abi-ecl.lisp).  Testing against the ECL that
+# can do them is the point; the six minutes are cached against develop's SHA and
+# only paid when it moves.
 
 name: ECL
 
@@ -43,10 +58,77 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install ECL
+      # THE FORK, not Homebrew's.  lispnik/ecl carries two fixes to the dynamic
+      # FFI that stock ECL does not have, and both are measurable in one line
+      # each -- see "Prove it is the fork" below, which is not ceremony.
+      - name: Resolve lispnik/ecl develop
+        id: ecl
         run: |
-          brew install ecl
-          ecl --version
+          sha=$(git ls-remote https://github.com/lispnik/ecl.git refs/heads/develop | cut -f1)
+          [ -n "$sha" ] || { echo "could not resolve lispnik/ecl develop" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "resolved develop to $sha"
+
+      # Keyed on the SHA, so a new commit on develop rebuilds and nothing else
+      # does.  A build is about six minutes; a hit is a few seconds.
+      - name: Cache the built ECL
+        id: ecl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/ecl
+          key: ecl-${{ runner.os }}-${{ runner.arch }}-${{ steps.ecl.outputs.sha }}
+
+      - name: Build ECL from the fork
+        if: steps.ecl-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/lispnik/ecl.git "$HOME/ecl-src"
+          cd "$HOME/ecl-src"
+          git checkout ${{ steps.ecl.outputs.sha }}
+          ./configure --prefix="$HOME/.local/ecl" --enable-threads=yes
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Put the fork on the path
+        run: |
+          echo "$HOME/.local/ecl/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/ecl/bin/ecl" --version
+
+      # LOAD-BEARING, and the reason is the same one objc's safepoint workflow
+      # records about its own verification step: the portable suite passes on
+      # STOCK ECL too, so a run that silently fell back to Homebrew's would be
+      # green having tested nothing new.  These two probes are exactly what the
+      # fork adds and stock refuses, measured on both before being written down:
+      #
+      #   a structure through the dynamic FFI  -- stock: "does not denote an
+      #     elementary foreign type"
+      #   a variadic call through it           -- stock cannot even resolve a
+      #     symbol from :DEFAULT, because dlsym(0, ...) is not the global scope
+      #     on Darwin
+      - name: Prove it is the fork
+        run: |
+          ecl --norc --eval '
+            (handler-case
+                (let ((buf (ffi:allocate-foreign-object (quote (:array :int 4))))
+                      (rect (quote (:struct (:m :int) (:m :int) (:m :int) (:m :int)))))
+                  (loop for i below 4 for v in (list 3 7 11 19)
+                        do (setf (ffi:deref-array buf (quote (:array :int 4)) i) v))
+                  (let* ((cb (si::make-dynamic-callback
+                              (lambda (r u)
+                                (declare (ignore u))
+                                (if (= 19 (ffi:deref-array r (quote (:array :int 4)) 3))
+                                    0 1))
+                              (quote probe) :int (list rect :pointer-void)))
+                         (rc (si:call-cfun cb :int (list rect :pointer-void)
+                                           (list buf (ffi:make-null-pointer :void)))))
+                    (unless (zerop rc)
+                      (format *error-output* "~&the struct arrived wrong~%")
+                      (ext:quit 1))
+                    (format t "~&ok: a struct crosses BY VALUE into a dynamic callback~%")
+                    (ext:quit 0)))
+              (error (c)
+                (format *error-output*
+                        "~&this is not the fork -- the dynamic FFI refused: ~A~%" c)
+                (ext:quit 1)))'
 
       - name: Build the vendored library
         run: make -C vendor && make -C vendor check
