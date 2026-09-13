@@ -217,7 +217,9 @@ would be porting the workaround instead of the feature."
                     (funcall reader profile)
                     (lambda (hex)
                       (funcall writer hex (editable-profile session))
-                      (apply-profile-edit session))))))
+                      (apply-profile-edit session)))
+                   nil
+                   crt.ui::+well-width+)))
       (list
        (list :section "Font")
        (list "Source"

@@ -191,6 +191,9 @@ the colour panel hands back whatever space the user picked in."
 (defconstant +section-lead+ 18 "Air ABOVE a section heading.")
 (defconstant +section-trail+ 8 "And below it, before its first row.")
 (defconstant +group-gap+ 10 "Between buttons sharing a row.")
+(defconstant +well-width+ 64
+  "A colour well.  Wide enough to read the colour, and nowhere near the width of
+the window -- a well stretched across a form looks like a progress bar.")
 
 (defun set-frame (view x y width height)
   (objc:invoke (objc:objc-object-pointer view) "setFrame:"
@@ -243,14 +246,19 @@ look deliberate."
              (add-subview view (set-frame control x y w +control-height+))
              (incf x (+ w +group-gap+))))))
       (t
-       (destructuring-bind (label control &optional trailing) row
+       (destructuring-bind (label control &optional trailing fixed-width) row
          (when label
            (add-subview view (set-frame (make-label label :alignment :right)
                                         +form-margin+ (+ y 2)
                                         +label-width+ +label-height+)))
          (let* ((x (if label (+ +form-margin+ +label-width+ +gutter+) +form-margin+))
                 (trailing-width (if trailing (+ +readout-width+ +group-gap+) 0))
-                (control-width (max 60 (- right x trailing-width))))
+                ;; FIXED-WIDTH for a control with a natural size.  A slider or a
+                ;; pop-up wants the whole column; a colour well does not, and
+                ;; stretching one across the form makes it look like a progress
+                ;; bar rather than a swatch.
+                (control-width (or fixed-width
+                                   (max 60 (- right x trailing-width)))))
            (add-subview view (set-frame control x y control-width +control-height+))
            (when trailing
              (add-subview view (set-frame trailing (- right +readout-width+) (+ y 2)
@@ -263,6 +271,9 @@ A row is (LABEL CONTROL &optional TRAILING), or one of:
 
   (:section TEXT)        a small bold heading with air around it
   (:group c1 c2 ...)     controls side by side, each sized to its title
+
+and a fourth element on an ordinary row fixes the control's width, for the ones
+with a natural size.
   (:gap)                  half a row of nothing
 
 MINIMUM-HEIGHT keeps a short form filling its scroller, so that the background
