@@ -253,6 +253,23 @@ faces, which are outlines and are rasterised at the size they are drawn."
       (screen-backing-scale)
       1))
 
+(defun default-session-command ()
+  "The command a new terminal runs when nobody named one: the custom command if
+the settings ask for one, otherwise NIL and the login shell.
+
+Here rather than only in APPLY-OPTIONS, because APPLY-OPTIONS runs once at
+startup and New Window and New Tab do not go through it -- so a custom command
+was honoured by the first terminal of a session and by none of the others, which
+is the sort of difference nobody reports as a bug and everybody notices."
+  (let ((settings crt.settings:*settings*))
+    (when (crt.settings:settings-use-custom-command settings)
+      (let ((text (crt.settings:settings-custom-command settings)))
+        (when (plusp (length text))
+          ;; Fully qualified: the parser lives in the CATHODE-RAY-TUBE
+          ;; package, below the seam, because a command line is arithmetic over
+          ;; strings.  CRT.UI does not use that package and should not start.
+          (cathode-ray-tube:tokenize-command-line text))))))
+
 (defun profile-system-font-p (profile)
   "True when PROFILE's fontName names an INSTALLED family rather than one of ours.
 
@@ -313,7 +330,8 @@ there is no bundled name left in the profile to resolve."
                (values font face (font-scale-for face)))))))))
 
 (defun make-session (&key width height (columns *default-columns*)
-                          (rows *default-rows*) command directory
+                          (rows *default-rows*)
+                          (command (default-session-command)) directory
                           font (title "cathode-ray-tube")
                           (profile *default-profile*) (effects t) tab-of)
   "A window running a shell.  Main thread only.

@@ -32,7 +32,7 @@ RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 	  --eval '$(REGISTRY)'
 
 .PHONY: all deps vendor check-vendor probe constants check-metal-constants \
-        test test-no-bundle run repl app icon check-app check-dist run-app \
+        test test-no-bundle check-undefined run repl app icon check-app check-dist run-app \
         install-app \
         notarize dmg notarize-dmg release gallery clean distclean
 
@@ -86,6 +86,32 @@ check-metal-constants:
 	  --eval '(uiop:quit (if (fiveam:run! (quote cathode-ray-tube/tests::metal-constants-match-the-sdk)) 0 1))'
 
 # --- the suite ---------------------------------------------------------------
+
+# A FORCED compile of everything, failing on any undefined function.
+#
+# This catches a class the test suite structurally cannot: a call to a function
+# that does not exist is a compile-time WARNING and a run-time error, so it stays
+# invisible until something executes that exact line.  It happened -- a function
+# referenced from CRT.UI that lives in the CATHODE-RAY-TUBE package, where CRT.UI
+# does not look.  Everything compiled, the suite was green, and the code was one
+# call away from an error.
+#
+# --force, because ASDF will not recompile a file whose fasl is newer, and a
+# warning printed during an earlier build is a warning nobody sees again.
+#
+# NOT $(RUNLISP): that muffles STYLE-WARNING, and `undefined function' is one.
+# The first version of this target used it, reported ok, and went on reporting ok
+# with a deliberately broken call compiled in -- which is why every guard here is
+# broken on purpose once before it is trusted.
+check-undefined:
+	@$(LISP) --non-interactive --no-userinit --no-sysinit \
+	  --eval '(require :asdf)' \
+	  --eval '(proclaim (quote (sb-ext:muffle-conditions sb-ext:compiler-note)))' \
+	  --eval '$(REGISTRY)' \
+	  --eval '(asdf:load-system :cathode-ray-tube :force t)' 2>&1 \
+	  | grep -iE 'undefined (function|variable)' \
+	  && { echo 'error: the build references something that does not exist' >&2; \
+	       exit 1; } || echo 'ok: no undefined functions or variables'
 
 test: $(DYLIB)
 	$(RUNLISP) \

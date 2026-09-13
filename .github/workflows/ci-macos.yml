@@ -103,6 +103,14 @@ jobs:
                             (objc.runloop:window-server-p)
                             (or (crt.metal:device-name) "none"))'
 
+      # A call to a function that does not exist is a compile-time warning and a
+      # run-time error, so the suite cannot catch one until a test happens to
+      # execute that exact line.  This compiles everything from scratch and fails
+      # on the warning.  See the target's own note.
+      - name: Nothing references a function that does not exist
+        timeout-minutes: 5
+        run: make check-undefined
+
       # Its own timeout, well under the job's thirty minutes.  A suite that
       # DEADLOCKS does not fail, it hangs -- and a hang consumes the whole job
       # budget and then reports "cancelled", with no summary and no failing test

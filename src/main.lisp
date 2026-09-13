@@ -54,11 +54,11 @@ not, which is exactly the case the log exists for."
                        (crt.settings:settings-effects settings))
           :fullscreen (getf options :fullscreen)
           :directory (getf options :directory)
-          :command (or (getf options :command)
-                       (when (crt.settings:settings-use-custom-command settings)
-                         (let ((text (crt.settings:settings-custom-command settings)))
-                           (when (plusp (length text))
-                             (tokenize-command-line text))))))))
+          ;; `-e' only.  The custom-command setting is CRT.UI's business now --
+          ;; see DEFAULT-SESSION-COMMAND -- because New Window and New Tab do not
+          ;; come through here, and a setting honoured by the first terminal and
+          ;; by none of the others is worse than one that does nothing.
+          :command (getf options :command))))
 
 (defun main ()
   "Start the application on the main thread.
