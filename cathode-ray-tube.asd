@@ -38,6 +38,11 @@ and terminal emulation by a vendored libvterm."
                    (:file "color")
                    (:file "resource")
                    (:file "foreign")))
+     (:module "settings"
+      :serial t
+      :components ((:file "profile")
+                   (:file "builtin-profiles")
+                   (:file "derived")))
      (:module "vt"
       :serial t
       :components ((:file "cells")
@@ -85,6 +90,7 @@ and terminal emulation by a vendored libvterm."
     :components ((:file "package")
                  (:file "math-tests")
                  (:file "color-tests")
+                 (:file "profile-tests")
                  (:file "vt-tests")
                  (:file "pty-tests")
                  (:file "terminal-tests")

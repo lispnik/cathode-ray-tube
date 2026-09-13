@@ -62,6 +62,34 @@
    #:+blend-factor-src-alpha+ #:+blend-factor-one-minus-src-alpha+
    #:+blend-operation-add+))
 
+(defpackage #:cathode-ray-tube.settings
+  (:use #:cl)
+  (:nicknames #:crt.settings)
+  (:local-nicknames (#:util #:cathode-ray-tube.util))
+  (:export
+   #:profile #:profile-p #:make-profile #:copy-profile
+   #:profile-name #:find-profile #:+profiles+ #:profile-names
+   ;; the 27 keys
+   #:profile-ambient-light #:profile-background-color #:profile-bloom
+   #:profile-brightness #:profile-burn-in #:profile-chroma-color
+   #:profile-contrast #:profile-flickering #:profile-font-color
+   #:profile-font-name #:profile-font-source #:profile-font-width
+   #:profile-line-spacing #:profile-glowing-line #:profile-horizontal-sync
+   #:profile-jitter #:profile-rasterization #:profile-rgb-shift
+   #:profile-saturation-color #:profile-screen-curvature #:profile-screen-radius
+   #:profile-static-noise #:profile-window-opacity #:profile-margin
+   #:profile-blinking-cursor #:profile-frame-size #:profile-frame-color
+   #:profile-frame-shininess
+   ;; derived
+   #:saturated-color #:derived-font-color #:derived-background-color
+   #:derived-frame-color #:frame-enabled-p #:frame-size #:frame-shininess
+   #:screen-radius #:margin #:burn-in-fade-time #:horizontal-sync-strength
+   #:rasterization-intensity #:normalized-window-scale
+   #:+raster-none+ #:+raster-scanlines+ #:+raster-pixels+
+   #:+raster-subpixels+ #:+raster-modern+
+   ;; serialisation
+   #:profile-to-alist #:profile-from-alist #:profile-to-json #:profile-from-json))
+
 (defpackage #:cathode-ray-tube.vt
   (:use #:cl)
   (:nicknames #:crt.vt)

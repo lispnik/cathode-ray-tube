@@ -19,6 +19,7 @@
 (defpackage #:cathode-ray-tube/tests
   (:use #:cl #:fiveam)
   (:local-nicknames (#:util #:cathode-ray-tube.util)
+                    (#:settings #:cathode-ray-tube.settings)
                     (#:metal #:cathode-ray-tube.metal)
                     (#:vt #:cathode-ray-tube.vt)
                     (#:pty #:cathode-ray-tube.pty)
@@ -33,6 +34,7 @@
 
 (def-suite math :in all :description "utils.js and fontmanager.cpp arithmetic.")
 (def-suite color :in all :description "Colour, including the /256.")
+(def-suite profile :in all :description "The fourteen profiles and their derivations.")
 (def-suite vt :in all :description "The terminal core. No GPU, no window.")
 (def-suite pty :in all :description "Real child processes on real ptys.")
 (def-suite terminal :in all :description "A pty and a screen, end to end.")
