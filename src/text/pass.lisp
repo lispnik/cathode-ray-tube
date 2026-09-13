@@ -39,6 +39,18 @@ the structure's 16-byte alignment is satisfied without padding.")
   ;; POINTS and the terminal comes out half-size.  This is cool-retro-term's
   ;; `scaleTexture', arrived at from the same direction.
   (scale 1 :type (integer 1 16))
+  ;; Extra rows between lines, in FONT pixels before magnification.
+  ;;
+  ;; Every one of the fourteen profiles sets lineSpacing to 0.1, and without it
+  ;; the rows touch -- which on the bitmap faces reads as a rendering fault
+  ;; rather than as tight leading.  fontmanager.cpp:483:
+  ;;
+  ;;     lineSpacing = qRound(targetPixelHeight * m_lineSpacing)
+  ;;
+  ;; qRound, not CL:ROUND: see CRT.UTIL:QROUND.  A 16-pixel cell at 0.1 gives 2
+  ;; rows, and a 15-pixel one gives 2 rather than 1, which is the whole
+  ;; difference the two rounding rules make here.
+  (line-spacing 0 :type fixnum)
   (margin 0.0 :type single-float)
   ;; The instance buffer: an MTLBuffer in SHARED storage, written in place.
   ;; Two instances per cell is the worst case -- a background and a glyph --
@@ -53,30 +65,42 @@ the structure's 16-byte alignment is satisfied without padding.")
   ;; Rows, reused between frames, so a steady terminal allocates nothing.
   (scratch nil))
 
-(defun text-grid-size (font width height &key (margin 0.0) (scale 1))
+(defun line-height (font line-spacing)
+  "FONT's cell height plus its leading, in font pixels."
+  (let ((height (max 1d0 (font-cell-height font))))
+    (+ height (util:qround (* height line-spacing)))))
+
+(defun text-grid-size (font width height &key (margin 0.0) (scale 1)
+                                              (line-spacing 0d0))
   "How many columns and rows of FONT fit in WIDTH by HEIGHT device pixels."
   (let ((cw (* scale (max 1d0 (font-cell-width font))))
-        (ch (* scale (max 1d0 (font-cell-height font)))))
+        (ch (* scale (line-height font line-spacing))))
     (values (max 1 (floor (- width (* 2 margin)) cw))
             (max 1 (floor (- height (* 2 margin)) ch)))))
 
-(defun grid-pixel-size (font cols rows &key (margin 0.0) (scale 1))
+(defun grid-pixel-size (font cols rows &key (margin 0.0) (scale 1)
+                                            (line-spacing 0d0))
   "The device pixels COLS by ROWS of FONT need.  The inverse of TEXT-GRID-SIZE.
 
 For sizing a window to a grid rather than fitting a grid to a window, which is
 what a terminal defaulting to 80x25 wants."
   (values (+ (* cols scale (max 1d0 (font-cell-width font))) (* 2 margin))
-          (+ (* rows scale (max 1d0 (font-cell-height font))) (* 2 margin))))
+          (+ (* rows scale (line-height font line-spacing)) (* 2 margin))))
 
-(defun make-text-renderer (&key font width height (margin 0.0) (scale 1))
+(defun make-text-renderer (&key font width height (margin 0.0) (scale 1)
+                                (line-spacing 0d0))
   (let* ((atlas (make-atlas))
          (renderer (%make-text-renderer
                     :font font
                     :atlas atlas
                     :margin (float margin 1.0)
                     :scale (max 1 (round scale))
+                    :line-spacing (util:qround
+                                   (* (max 1d0 (font-cell-height font))
+                                      line-spacing))
                     :cell-width (float (* scale (font-cell-width font)) 1.0)
-                    :cell-height (float (* scale (font-cell-height font)) 1.0)
+                    :cell-height (float (* scale (line-height font line-spacing))
+                                        1.0)
                     ;; Nearest, because the low-resolution faces are the point:
                     ;; their pixels are magnified by a whole number and must stay
                     ;; square.  Linear would turn Commodore PET into a smudge.
@@ -104,7 +128,13 @@ what a terminal defaulting to 80x25 wants."
   (multiple-value-bind (cols rows)
       (text-grid-size (text-renderer-font renderer) width height
                       :margin (text-renderer-margin renderer)
-                      :scale (text-renderer-scale renderer))
+                      :scale (text-renderer-scale renderer)
+                      ;; Recomputed from the stored PIXELS rather than the
+                      ;; original fraction, so a resize cannot round differently
+                      ;; from the construction and shift every glyph by one.
+                      :line-spacing (/ (text-renderer-line-spacing renderer)
+                                       (max 1d0 (font-cell-height
+                                                 (text-renderer-font renderer)))))
     (setf (text-renderer-cols renderer) cols
           (text-renderer-rows renderer) rows)
     (when (text-renderer-target renderer)

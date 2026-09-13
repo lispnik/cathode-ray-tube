@@ -164,6 +164,48 @@ rendered at: magnifying its native pixels by a whole number is what keeps them
 square, and rasterising it at some other size is what makes it look like a
 blurry version of itself.")
 
+(defparameter +profile-font-names+
+  '(("TERMINESS_SCALED"        . :terminess)
+    ("BIGBLUE_TERMINAL_SCALED" . :bigblue-terminal)
+    ("EXCELSIOR_SCALED"        . :fixedsys-excelsior)
+    ("GREYBEARD_SCALED"        . :greybeard)
+    ("COMMODORE_PET_SCALED"    . :commodore-pet)
+    ("GOHU_11_SCALED"          . :gohu)
+    ("COZETTE_SCALED"          . :cozette)
+    ("UNSCII_8_SCALED"         . :unscii-8)
+    ("UNSCII_8_THIN_SCALED"    . :unscii-8-thin)
+    ("UNSCII_16_SCALED"        . :unscii-16)
+    ("APPLE_II_SCALED"         . :apple-ii)
+    ("ATARI_400_SCALED"        . :atari-400)
+    ("COMMODORE_64_SCALED"     . :commodore-64)
+    ("IBM_EGA_8x8"             . :ibm-ega-8x8)
+    ("IBM_VGA_8x16"            . :ibm-vga-8x16)
+    ("DEPARTURE_MONO_SCALED"   . :departure-mono)
+    ;; The eight "modern" faces, offered only when rasterisation is Modern.
+    ("TERMINESS"               . :terminess-hi)
+    ("HACK"                    . :hack)
+    ("FIRA_CODE"               . :fira-code)
+    ("IOSEVKA"                 . :iosevka)
+    ("JETBRAINS_MONO"          . :jetbrains-mono)
+    ("IBM_3278"                . :ibm-3278)
+    ("SOURCE_CODE_PRO"         . :source-code-pro)
+    ("OPENDYSLEXIC"            . :opendyslexic))
+  "cool-retro-term's fontName values, as they appear in a profile.
+
+The names are upstream's, unchanged, because a profile file has to be readable
+by both programs -- see the note on +PROFILE-KEYS+.  The _SCALED suffix marks
+the LOW-RESOLUTION faces, which is a fact about how they are rendered rather
+than about the file: they are bitmap designs drawn for one pixel size and
+magnified by a whole number, never rasterised larger.")
+
+(defun font-for-profile-name (name)
+  "The bundled face a profile's fontName means, or NIL.
+
+NIL rather than an error: a profile from a newer cool-retro-term may name a face
+this build does not ship, and falling back to the default is a better answer
+than refusing to open the window."
+  (cdr (assoc name +profile-font-names+ :test #'string-equal)))
+
 (defun bundled-font-path (name)
   (let ((entry (assoc name +bundled-fonts+)))
     (unless entry (error "No bundled font named ~S." name))

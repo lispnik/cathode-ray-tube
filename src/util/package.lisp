@@ -174,7 +174,10 @@
    #:render-text #:text-grid-size #:grid-pixel-size #:resize-text-renderer
    #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
    #:text-renderer-cell-width #:text-renderer-cell-height
-   #:bundled-font-low-resolution-p #:load-bundled-font))
+   #:text-renderer-line-spacing #:line-height
+   #:bundled-font-low-resolution-p #:load-bundled-font
+   #:font-for-profile-name #:+profile-font-names+
+   #:bundled-font-native-size))
 
 (defpackage #:cathode-ray-tube.effects
   (:use #:cl)

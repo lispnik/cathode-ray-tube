@@ -151,3 +151,26 @@ clean; below that they alias, so they fade rather than shimmer."
   (is (> (crt.settings:normalized-window-scale 512d0 512d0)
          (crt.settings:normalized-window-scale 2048d0 2048d0))
       "a smaller window gets a larger scale, so the curvature looks the same"))
+
+(test every-profile-names-a-font-we-ship
+  "All fourteen profiles must resolve to a bundled face.
+
+The mapping is upstream's fontName strings, kept unchanged so that a profile
+file can be read by either program.  A profile whose face does not resolve opens
+in the default one, silently -- so this is what says whether that is happening."
+  (dolist (profile crt.settings:+profiles+)
+    (let* ((name (crt.settings:profile-font-name profile))
+           (face (crt.text:font-for-profile-name name)))
+      (is-true face "~A names the font ~S, which maps to nothing"
+          (crt.settings:profile-name profile) name)
+      (when face
+        (is-true (probe-file (crt.text:bundled-font-path face))
+            "~A wants ~S -> ~S, and that file is not there"
+            (crt.settings:profile-name profile) name face)))))
+
+(test the-font-table-covers-upstreams
+  "Every face cool-retro-term ships is nameable here."
+  (is (= 24 (length crt.text:+profile-font-names+)))
+  (dolist (entry crt.text:+profile-font-names+)
+    (is-true (probe-file (crt.text:bundled-font-path (cdr entry)))
+        "~S -> ~S is missing its file" (car entry) (cdr entry))))

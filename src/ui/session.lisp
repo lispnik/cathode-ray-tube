@@ -129,6 +129,14 @@ to one of these in M4; until then it is the face IBM VGA 8x16 names.")
 (defparameter *default-profile* "Default Amber"
   "The profile a new window opens with -- cool-retro-term's own default.")
 
+(defconstant +default-line-spacing+ 0.1d0
+  "The leading every one of the fourteen profiles asks for.
+
+A constant here rather than read from the profile because the WINDOW is sized
+before a profile is chosen, and a terminal whose rows changed height when you
+switched profiles would be worse than one whose leading is slightly wrong for
+some of them.  All fourteen say 0.1, so there is nothing to choose between.")
+
 (defparameter *default-columns* 80)
 (defparameter *default-rows* 25
   "The grid a new window opens at.
@@ -178,7 +186,8 @@ whatever size the window is dragged to."
     ;; two gives a window half the size it should be on a Retina display.
     (unless (and width height)
       (multiple-value-bind (pixel-width pixel-height)
-          (crt.text:grid-pixel-size loaded columns rows :scale scale)
+          (crt.text:grid-pixel-size loaded columns rows :scale scale
+                                    :line-spacing +default-line-spacing+)
         (let ((backing (screen-backing-scale)))
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
@@ -192,7 +201,9 @@ whatever size the window is dragged to."
          (view (crt-window-view window)))
     (destructuring-bind (dw dh) (view-drawable-size view)
       (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh
-                                                    :scale scale))
+                                                    :scale scale
+                                                    :line-spacing
+                                                    +default-line-spacing+))
              (chosen (or (crt.settings:find-profile profile)
                          (error "No profile named ~S." profile)))
              (session (%make-session :window window :view view
@@ -202,7 +213,8 @@ whatever size the window is dragged to."
           (setf (session-graph session)
                 (crt.effects:make-graph :profile chosen :width dw :height dh)))
         (multiple-value-bind (cols rows)
-            (crt.text:text-grid-size loaded dw dh :scale scale)
+            (crt.text:text-grid-size loaded dw dh :scale scale
+                                     :line-spacing +default-line-spacing+)
           (setf (session-terminal session)
                 (crt.terminal:make-terminal
                  :rows rows :cols cols :command command

@@ -33,7 +33,7 @@ RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 
 .PHONY: all deps vendor check-vendor probe constants check-metal-constants \
         test test-no-bundle run repl app icon check-app run-app install-app \
-        notarize dmg notarize-dmg release clean distclean
+        notarize dmg notarize-dmg release gallery clean distclean
 
 all: deps
 
@@ -138,6 +138,15 @@ $(APP_STAMP): cathode-ray-tube-bundle.asd $(DYLIB) res/icon.png \
 	@mkdir -p build
 	@touch $(APP_STAMP)
 	@echo "built $(APP)"
+
+# Every profile, rendered headlessly into docs/gallery/.  Needs a GPU; needs no
+# window.  This is how the port is judged.
+gallery: $(DYLIB)
+	$(RUNLISP) \
+	  --eval '(asdf:load-system :cathode-ray-tube)' \
+	  --load tools/snapshot-png.lisp \
+	  --load tools/gallery.lisp \
+	  --eval '(crt-gallery:render-all)'
 
 icon: res/icon.png
 
