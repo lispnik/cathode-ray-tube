@@ -87,7 +87,15 @@ ones, which are outlines rasterised at the size they are drawn."
                                        (crt.text:bundled-font-native-size face))))
            (renderer (crt.text:make-text-renderer
                       :font font :width width :height height :scale scale
-                      :line-spacing (crt.settings:profile-line-spacing profile)))
+                      :line-spacing (crt.settings:profile-line-spacing profile)
+                      ;; The same two the application uses, so a gallery picture
+                      ;; is the picture: fontWidth is 1.25 on both Commodores and
+                      ;; the fallback chain is what keeps a 128-character face
+                      ;; from drawing blanks.
+                      :font-width (crt.settings:profile-font-width profile)
+                      :fallbacks (crt.text:font-fallback-chain
+                                  face
+                                  :pixel-size (crt.text:font-pixel-size font))))
            (graph (crt.effects:make-graph :profile profile :width width
                                           :height height))
            (target (crt.metal:make-texture :width width :height height

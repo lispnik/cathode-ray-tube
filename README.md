@@ -29,9 +29,22 @@ them:
 | ![Neon Cyan](docs/gallery/neon-cyan.png) Neon Cyan | ![Ghost Terminal](docs/gallery/ghost-terminal.png) Ghost Terminal | ![Plasma](docs/gallery/plasma.png) Plasma |
 | ![Boring](docs/gallery/boring.png) Boring | ![E-Ink](docs/gallery/e-ink.png) E-Ink | |
 
-`make test` is 340 checks; `make app` builds a bundle and `make release` a
-signed, notarised disk image. Still to come: the font manager and a settings
-window.
+There is a settings window (Cmd-,) with the same four tabs upstream has, tabs
+(Cmd-T, and the system's own tab bar), the twenty-four bundled faces and the
+machine's own monospace families, custom profiles saved, imported and exported
+as cool-retro-term's own JSON, and the size overlay while you resize.
+
+`make test` is 755 checks on SBCL and 423 on ECL — the lower half of the program
+is free of Objective-C and is tested on both. `make app` builds a bundle and
+`make release` a signed, notarised disk image.
+
+Two things are deliberately not claimed as parity. **Bloom** is close rather than
+identical: Qt's `FastBlur` is an undisclosed multi-pass box approximation with no
+source in the tree to port, so it is tuned by eye. **Rasterization intensity**
+differs where magnification is fractional, because the low-resolution faces here
+are magnified by whole numbers. Everything else is meant to match, and the
+arithmetic that decides it is asserted against a golden table taken from a
+running cool-retro-term.
 
 ## Building
 
