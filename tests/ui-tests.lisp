@@ -166,3 +166,62 @@ than one that is simply the wrong size: line wrapping, curses redraws and
                (is (= 25 rows) "the kernel thinks the pty has ~D rows" rows)
                (is (= 80 cols) "the kernel thinks the pty has ~D columns" cols)))
         (crt.ui:end-session session)))))
+
+(test a-session-uses-the-face-its-profile-names
+  "Half of what distinguishes the fourteen looks is the face.
+
+The mapping existed and nothing called it: MAKE-SESSION took a :font defaulting
+to IBM VGA and never consulted the profile, so all fourteen rendered in one
+face.  That makes the port look far less faithful than its shader work is, and
+it is invisible unless you compare two profiles that differ only in their font."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (dolist (name '("Default Amber" "Commodore PET" "Apple ][" "Plasma"))
+      (let ((session (crt.ui:make-session
+                      :profile name :title "cathode-ray-tube face test"
+                      :command '("/bin/sh" "-c" "sleep 5"))))
+        (unwind-protect
+             (let* ((profile (crt.ui:session-profile session))
+                    (wanted (crt.text:font-for-profile-name
+                             (crt.settings:profile-font-name profile)))
+                    (got (crt.text:font-handle (crt.ui:session-font session)))
+                    (expected (crt.text:load-bundled-font wanted)))
+               (unwind-protect
+                    ;; Compared by CELL METRICS rather than by identity: two
+                    ;; CTFontRefs for the same file are different objects, and
+                    ;; the thing that actually matters is that the grid is the
+                    ;; one this face implies.
+                    (is (= (crt.text:font-cell-width expected)
+                           (crt.text:font-cell-width (crt.ui:session-font session)))
+                        "~A wants ~S; the session's face has a different cell width"
+                        name wanted)
+                 (crt.text:release-font expected))
+               (is-true got))
+          (crt.ui:end-session session))))))
+
+(test the-margin-comes-from-the-profile
+  "Text must not run to the edge of the virtual screen.
+
+margin = lint(1, 40, _margin) + (1 - 1/sqrt(2)) * screenRadius, and the second
+term is why: a rounded corner eats into the usable rectangle, so a heavily
+rounded profile needs a bigger inset or its text runs under the bezel.  It was
+being computed and never passed, so every profile had a margin of zero."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let ((round (crt.ui:make-session :profile "Commodore PET"
+                                      :command '("/bin/sh" "-c" "sleep 5")))
+          (flat (crt.ui:make-session :profile "IBM 3278 Reborn"
+                                     :command '("/bin/sh" "-c" "sleep 5"))))
+      (unwind-protect
+           (let ((round-margin (crt.text::text-renderer-margin
+                                (crt.ui:session-renderer round)))
+                 (flat-margin (crt.text::text-renderer-margin
+                               (crt.ui:session-renderer flat))))
+             (is (plusp flat-margin) "even a flat screen has some inset")
+             (is (> round-margin flat-margin)
+                 "a heavily rounded screen needs a bigger inset: PET ~,1F vs ~
+                  3278 ~,1F" round-margin flat-margin))
+        (crt.ui:end-session round)
+        (crt.ui:end-session flat)))))

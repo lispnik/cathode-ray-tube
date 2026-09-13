@@ -209,6 +209,7 @@
    #:on-main-thread #:drain-main-thread-queue
    #:session #:session-p #:make-session #:end-session #:run-terminal
    #:session-window #:session-view #:session-terminal #:session-renderer
+   #:session-font #:session-margin #:profile-font
    #:*sessions* #:*default-font* #:*default-profile*
    #:*default-columns* #:*default-rows* #:screen-backing-scale
    #:session-profile #:session-graph #:set-session-profile))

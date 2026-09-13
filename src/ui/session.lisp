@@ -39,7 +39,8 @@ them in that order and separately."
   (let* ((view (session-view session))
          (renderer (session-renderer session)))
     (destructuring-bind (width height) (view-drawable-size view)
-      (multiple-value-bind (cols rows) (crt.text:resize-text-renderer renderer width height)
+      (multiple-value-bind (cols rows)
+          (crt.text:resize-text-renderer renderer width height)
         (crt.terminal:terminal-resize (session-terminal session) rows cols)
         (when (session-graph session)
           (crt.effects:resize-graph (session-graph session) width height))
@@ -164,9 +165,22 @@ faces, which are outlines and are rasterised at the size they are drawn."
       (screen-backing-scale)
       1))
 
+(defun profile-font (profile &optional override)
+  "The bundled face PROFILE asks for.
+
+OVERRIDE wins when given.  Otherwise the profile's own fontName decides, which
+is half of what distinguishes the fourteen looks -- Commodore PET is PetMe and
+Apple ][ is PrintChar21, and rendering both in IBM VGA makes the port look far
+less faithful than its shader work actually is.  A name this build does not
+ship falls back to the default rather than refusing to open a window, since a
+profile written by a newer cool-retro-term may name a face we do not have."
+  (or override
+      (crt.text:font-for-profile-name (crt.settings:profile-font-name profile))
+      *default-font*))
+
 (defun make-session (&key width height (columns *default-columns*)
                           (rows *default-rows*) command
-                          (font *default-font*) (title "cathode-ray-tube")
+                          font (title "cathode-ray-tube")
                           (profile *default-profile*) (effects t))
   "A window running a shell.  Main thread only.
 
@@ -175,43 +189,50 @@ of the way the grid is computed afterwards, and deliberately so: a terminal
 should OPEN at a familiar number of characters and only then start following
 whatever size the window is dragged to."
   (ensure-appkit)
-  (let* ((loaded (crt.text::load-bundled-font font))
-         (scale (font-scale-for font)))
+  (let* ((chosen (or (crt.settings:find-profile profile)
+                     (error "No profile named ~S." profile)))
+         ;; The PROFILE is resolved first, because it is what decides the face,
+         ;; and the face is what decides the cell size, which decides the window.
+         (face (profile-font chosen font))
+         (loaded (crt.text:load-bundled-font face))
+         (scale (font-scale-for face))
+         (margin (crt.settings:margin chosen)))
     (unless loaded
-      (error "Could not load the bundled font ~S." font))
+      (error "Could not load the bundled font ~S." face))
     ;; Device pixels for the grid, then points for the window: AppKit sizes
     ;; windows in points and the glyphs are in device pixels, and conflating the
     ;; two gives a window half the size it should be on a Retina display.
     (unless (and width height)
       (multiple-value-bind (pixel-width pixel-height)
           (crt.text:grid-pixel-size loaded columns rows :scale scale
+                                    :margin margin
                                     :line-spacing +default-line-spacing+)
         (let ((backing (screen-backing-scale)))
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
-    (make-session-in-window loaded scale width height title command profile
-                            effects)))
+    (make-session-in-window loaded scale margin width height title command
+                            chosen effects)))
 
-(defun make-session-in-window (loaded scale width height title command profile
-                               effects)
+(defun make-session-in-window (loaded scale margin width height title command
+                               profile effects)
   (let* ((window (make-crt-window :width width :height height :title title
                                   :draw-function #'draw-session))
          (view (crt-window-view window)))
     (destructuring-bind (dw dh) (view-drawable-size view)
       (let* ((renderer (crt.text:make-text-renderer :font loaded :width dw :height dh
                                                     :scale scale
+                                                    :margin margin
                                                     :line-spacing
                                                     +default-line-spacing+))
-             (chosen (or (crt.settings:find-profile profile)
-                         (error "No profile named ~S." profile)))
              (session (%make-session :window window :view view
                                      :renderer renderer :font loaded
-                                     :profile chosen :effects effects)))
+                                     :margin (float margin 1.0)
+                                     :profile profile :effects effects)))
         (when effects
           (setf (session-graph session)
-                (crt.effects:make-graph :profile chosen :width dw :height dh)))
+                (crt.effects:make-graph :profile profile :width dw :height dh)))
         (multiple-value-bind (cols rows)
-            (crt.text:text-grid-size loaded dw dh :scale scale
+            (crt.text:text-grid-size loaded dw dh :scale scale :margin margin
                                      :line-spacing +default-line-spacing+)
           (setf (session-terminal session)
                 (crt.terminal:make-terminal
