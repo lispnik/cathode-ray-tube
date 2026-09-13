@@ -174,7 +174,7 @@
    #:render-text #:text-grid-size #:grid-pixel-size #:resize-text-renderer
    #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
    #:text-renderer-cell-width #:text-renderer-cell-height
-   #:text-renderer-line-spacing #:line-height
+   #:text-renderer-line-spacing #:line-height #:text-renderer-virtual-size
    #:bundled-font-low-resolution-p #:load-bundled-font
    #:font-for-profile-name #:+profile-font-names+
    #:bundled-font-native-size))

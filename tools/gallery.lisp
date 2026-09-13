@@ -101,14 +101,13 @@ ones, which are outlines rasterised at the size they are drawn."
              ;; no trail at all and the burn-in-heavy profiles would look
              ;; identical to the rest -- which is exactly the difference these
              ;; pictures exist to show.
-             (dotimes (i 2)
-               (crt.effects:render-effects
-                graph text target
-                :time (+ time (* i 0.016d0)) :painted t
-                :virtual-width (* (crt.text:text-renderer-cols renderer)
-                                  (crt.text:text-renderer-cell-width renderer))
-                :virtual-height (* (crt.text:text-renderer-rows renderer)
-                                   (crt.text:text-renderer-cell-height renderer))))
+             (multiple-value-bind (vw vh)
+                 (crt.text:text-renderer-virtual-size renderer)
+               (dotimes (i 2)
+                 (crt.effects:render-effects graph text target
+                                             :time (+ time (* i 0.016d0)) :painted t
+                                             :virtual-width vw
+                                             :virtual-height vh)))
              (values target
                      (crt.text:text-renderer-cols renderer)
                      (crt.text:text-renderer-rows renderer)

@@ -74,21 +74,19 @@ them in that order and separately."
              (target (crt.text:render-text renderer snapshot
                                            :default-fg '(255 255 255)
                                            :default-bg '(0 0 0))))
-        (if (and (session-effects session) (session-graph session))
+        (multiple-value-bind (vw vh) (crt.text:text-renderer-virtual-size renderer)
+         (if (and (session-effects session) (session-graph session))
             (crt.effects:render-effects
              (session-graph session) target texture
              :drawable drawable
              :time (crt.ui:view-effect-time view)
              :painted (crt.terminal:snapshot-painted snapshot)
-             ;; The TERMINAL's pixel grid, not the drawable's.  This is what
-             ;; sets the scanline frequency; conflating it with device pixels
-             ;; is the classic way to get scanlines that are the wrong size and
-             ;; moire that moves when the window does.
-             :virtual-width (* (crt.terminal:terminal-cols terminal)
-                               (crt.text::text-renderer-cell-width renderer))
-             :virtual-height (* (crt.terminal:terminal-rows terminal)
-                                (crt.text::text-renderer-cell-height renderer)))
-            (blit-to-drawable session target texture drawable))))))
+             ;; The terminal's grid in NATIVE font pixels -- not the drawable's
+             ;; size, and not the magnified cell either.  See
+             ;; TEXT-RENDERER-VIRTUAL-SIZE for what passing the magnified one
+             ;; does, which is to switch rasterisation off everywhere.
+             :virtual-width vw :virtual-height vh)
+            (blit-to-drawable session target texture drawable)))))))
 
 (defun update-session-title (session)
   (let ((title (crt.terminal:terminal-title (session-terminal session))))

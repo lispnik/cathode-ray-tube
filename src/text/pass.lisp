@@ -70,6 +70,24 @@ the structure's 16-byte alignment is satisfied without padding.")
   (let ((height (max 1d0 (font-cell-height font))))
     (+ height (util:qround (* height line-spacing)))))
 
+(defun text-renderer-virtual-size (renderer)
+  "The terminal's grid in NATIVE font pixels: (values WIDTH HEIGHT).
+
+NOT the magnified size, and the distinction is the whole reason two resolution
+spaces exist.  This is what sets the scanline FREQUENCY -- one scanline per
+terminal pixel row -- while the drawable's size only feeds the anti-moire ramp.
+
+Passing the magnified size instead makes the two equal, so the oversampling
+ratio comes out as exactly the magnification, and smoothstep(2, 4, 2) is zero:
+rasterisation silently never engages, on every profile, at every window size.
+That is what was happening, and a scanline profile that renders no scanlines
+looks like a shader bug rather than an arithmetic one."
+  (let ((scale (text-renderer-scale renderer)))
+    (values (/ (* (text-renderer-cols renderer) (text-renderer-cell-width renderer))
+               scale)
+            (/ (* (text-renderer-rows renderer) (text-renderer-cell-height renderer))
+               scale))))
+
 (defun text-grid-size (font width height &key (margin 0.0) (scale 1)
                                               (line-spacing 0d0))
   "How many columns and rows of FONT fit in WIDTH by HEIGHT device pixels."

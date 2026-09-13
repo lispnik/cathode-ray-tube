@@ -239,3 +239,50 @@ my new monitor' and is very hard to act on."
                           "and it is redrawn once when invalidated"))
             (crt.metal:release-texture source)
             (crt.metal:release-texture target)))))))
+
+(test rasterization-needs-real-oversampling
+  "The anti-moire ramp, and the reason the two resolution spaces exist.
+
+Scanlines need two device pixels per TERMINAL pixel to exist at all and four to
+be clean, so below that they fade rather than shimmer.  The trap is that the
+ramp is fed the terminal's grid in NATIVE font pixels; feeding it the MAGNIFIED
+grid makes the ratio come out as exactly the magnification, smoothstep(2,4,2) is
+zero, and rasterisation silently never engages on any profile at any window
+size.  That is what was happening."
+  (is (= 0d0 (crt.settings:rasterization-intensity 500d0 300d0 500d0 300d0))
+      "1x: no scanlines")
+  (is (= 0d0 (crt.settings:rasterization-intensity 500d0 300d0 1000d0 600d0))
+      "2x is the floor, so still none -- and an integer 2x magnification lands
+exactly here, which is why this had to be measured rather than assumed")
+  (is (< 0d0 (crt.settings:rasterization-intensity 500d0 300d0 1500d0 900d0) 1d0)
+      "3x: partway up")
+  (is (= 1d0 (crt.settings:rasterization-intensity 500d0 300d0 2000d0 1200d0))
+      "4x: full strength"))
+
+(test virtual-size-is-the-native-grid
+  "TEXT-RENDERER-VIRTUAL-SIZE must divide the magnification back out."
+  (when (gpu-or-skip)
+    (let ((font (crt.text:load-bundled-font :ibm-vga-8x16)))
+      (if (null font)
+          (skip "the bundled fonts are not present")
+          (let ((one (crt.text:make-text-renderer :font font :width 640 :height 400
+                                                  :scale 1))
+                (two (crt.text:make-text-renderer :font font :width 640 :height 400
+                                                  :scale 2)))
+            (unwind-protect
+                 (multiple-value-bind (w1 h1) (crt.text:text-renderer-virtual-size one)
+                   (multiple-value-bind (w2 h2) (crt.text:text-renderer-virtual-size two)
+                     ;; At 2x there are half as many cells, each of the same
+                     ;; NATIVE size, so the virtual grid is half as wide -- not
+                     ;; the same, and certainly not double.
+                     (is (< w2 w1) "2x must give a smaller native grid: ~,0F vs ~,0F"
+                         w2 w1)
+                     (is (< h2 h1))
+                     ;; And it must be smaller than the drawable, or the ramp
+                     ;; can never exceed 1x.
+                     (is (< w2 640) "the native grid must be smaller than the ~
+                                     drawable, or oversampling is 1x by ~
+                                     construction")))
+              (crt.text:release-text-renderer one)
+              (crt.text:release-text-renderer two)
+              (crt.text:release-font font)))))))
