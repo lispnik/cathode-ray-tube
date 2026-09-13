@@ -99,7 +99,8 @@ and terminal emulation by a vendored libvterm."
       :serial t
       :components ((:file "font")
                    (:file "atlas")
-                   (:file "pass")))
+                   (:file "pass")
+                   (:file "overlay")))
      (:module "effects"
       :serial t
       :components ((:file "uniforms")

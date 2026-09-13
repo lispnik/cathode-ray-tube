@@ -22,6 +22,8 @@
   ;; by the reader thread, and the difference is how many bells arrived since
   ;; the last frame.
   (bells-seen 0 :type unsigned-byte)
+  ;; The transient COLUMNSxROWS readout, drawn OVER the finished frame.
+  (overlay nil)
   (selection nil)
   (dragging nil)
   (scale 1 :type (integer 1 16))
@@ -56,6 +58,12 @@ them in that order and separately."
         (crt.terminal:terminal-resize (session-terminal session) rows cols)
         (when (session-graph session)
           (crt.effects:resize-graph (session-graph session) width height))
+        ;; The readout starts its second here, and only on a grid that actually
+        ;; changed -- OVERLAY-NOTE-SIZE decides that, so dragging a window edge
+        ;; three pixels without crossing a cell boundary does not keep the
+        ;; overlay alive for as long as the mouse is down.
+        (let ((overlay (session-overlay session)))
+          (when overlay (crt.text:overlay-note-size overlay cols rows)))
         (values cols rows)))))
 
 ;;; The frame -------------------------------------------------------------------
@@ -102,18 +110,28 @@ them in that order and separately."
                                       (lambda (row col)
                                         (cell-selected-p selection row col)))))))
         (multiple-value-bind (vw vh) (crt.text:text-renderer-virtual-size renderer)
-         (if (and (session-effects session) (session-graph session))
-            (crt.effects:render-effects
-             (session-graph session) target texture
-             :drawable drawable
-             :time (crt.ui:view-effect-time view)
-             :painted (crt.terminal:snapshot-painted snapshot)
-             ;; The terminal's grid in NATIVE font pixels -- not the drawable's
-             ;; size, and not the magnified cell either.  See
-             ;; TEXT-RENDERER-VIRTUAL-SIZE for what passing the magnified one
-             ;; does, which is to switch rasterisation off everywhere.
-             :virtual-width vw :virtual-height vh)
-            (blit-to-drawable session target texture drawable)))))))
+          ;; The overlay is drawn ON TOP of the finished frame, so whichever pass
+          ;; would have handed the drawable over must not: the last pass to touch
+          ;; it presents it, and that is the overlay when there is one.
+          (let* ((overlay (session-overlay session))
+                 (overlaid (and overlay (crt.text:overlay-visible-p overlay)))
+                 (present (unless overlaid drawable)))
+            (if (and (session-effects session) (session-graph session))
+                (crt.effects:render-effects
+                 (session-graph session) target texture
+                 :drawable drawable :present present
+                 :time (crt.ui:view-effect-time view)
+                 :painted (crt.terminal:snapshot-painted snapshot)
+                 ;; The terminal's grid in NATIVE font pixels -- not the
+                 ;; drawable's size, and not the magnified cell either.  See
+                 ;; TEXT-RENDERER-VIRTUAL-SIZE for what passing the magnified one
+                 ;; does, which is to switch rasterisation off everywhere.
+                 :virtual-width vw :virtual-height vh)
+                (blit-to-drawable session target texture drawable :present present))
+            (when overlaid
+              (destructuring-bind (dw dh) (view-drawable-size view)
+                (crt.text:render-overlay overlay renderer texture dw dh
+                                         :drawable drawable)))))))))
 
 (defconstant +blink-period+ 1.0d0
   "Seconds for a full blink cycle: half on, half off.
@@ -153,7 +171,7 @@ everything else on this machine has."
       (setf (session-bells-seen session) count)
       (objc:invoke "NSSound" "beep"))))
 
-(defun blit-to-drawable (session source texture drawable)
+(defun blit-to-drawable (session source texture drawable &key (present drawable))
   "Copy the text target to the window.
 
 Until the effect chain lands this is the whole of the output; afterwards it
@@ -170,7 +188,7 @@ remains the honest `effects off' path."
                             :label "blit")))))
     (crt.metal:with-render-pass (encoder texture
                                  :clear '(0d0 0d0 0d0 1d0)
-                                 :present drawable
+                                 :present present
                                  :label "blit")
       (crt.metal:use-pipeline encoder pipeline)
       (crt.metal:bind-fragment-texture encoder source 0)
@@ -350,6 +368,11 @@ whatever size the window is dragged to."
                     :right-down (lambda (event) (show-context-menu session event))
                     :wheel (lambda (event) (handle-scroll-wheel session event))))
         (apply-session-opacity session)
+        ;; showTerminalSize, upstream's own default of true.  NIL rather than a
+        ;; flag on the overlay: a session that will never show one should not
+        ;; carry the buffer for it.
+        (when (crt.settings:settings-show-terminal-size crt.settings:*settings*)
+          (setf (session-overlay session) (crt.text:make-overlay)))
         (push session *sessions*)
         (show-crt-window window)
         session)))))
@@ -362,6 +385,9 @@ whatever size the window is dragged to."
   (when (session-graph session)
     (crt.effects:release-graph (session-graph session))
     (setf (session-graph session) nil))
+  (when (session-overlay session)
+    (crt.text:release-overlay (session-overlay session))
+    (setf (session-overlay session) nil))
   (when (session-renderer session)
     (crt.text:release-text-renderer (session-renderer session))
     (setf (session-renderer session) nil))

@@ -111,15 +111,27 @@ slot.  The window drew, the shell ran, the prompt blinked, and it was read-only.
 Asserting on the CHILD rather than on the handler is the point: this passes only
 if a synthesized NSEvent travels the whole way -- keyDown:, the key table, the
 outbound queue, the reader thread's write, the pty, the shell, back through
-libvterm and onto the screen."
+libvterm and onto the screen.
+
+`tr a-z A-Z' rather than a shell reading a line, and the choice is load-bearing
+twice over.  It TRANSFORMS what it is given, so finding HI on screen cannot be
+the pty's own echo of the hi that was typed -- which a test looking for its own
+input would accept and learn nothing from.  And it is a plain binary, so a
+failure is about this program rather than about what a shell builtin does with a
+controlling terminal, which is a distinction this suite has already had to make
+once (see A-SIGNALLED-CHILD-REPORTS-128-PLUS-THE-SIGNAL).
+
+Every step says which one it was.  A blank screen is the same picture whether
+AppKit declined to build the event, the event arrived nowhere, or the child was
+never there to receive it, and on a CI runner you get one line to tell them
+apart."
   (when (window-server-or-skip)
     (crt.ui:ensure-appkit)
     (objc.runloop:shared-application :activation-policy 0)
     (let* ((session (crt.ui:make-session
                      :width 640 :height 400
                      :title "cathode-ray-tube input test"
-                     :command '("/bin/sh" "-c"
-                                "read line; printf 'GOT[%s]' \"$line\"; sleep 10")))
+                     :command '("/usr/bin/tr" "a-z" "A-Z")))
            (window (crt.ui:crt-window-handle (crt.ui:session-window session)))
            (view (crt.ui:session-view session))
            (terminal (crt.ui:session-terminal session)))
@@ -128,17 +140,17 @@ libvterm and onto the screen."
              (is-true (crt.ui:view-key-handler view)
                       "the session must install a key handler")
              (objc.runloop:pump-events :seconds 0.02d0 :max-seconds 1.0d0)
-             ;; AppKit declining to build the event is a different failure from
-             ;; the event not arriving, and a blank screen looks the same either
-             ;; way.  Separate them here, or a red run says only "not typed
-             ;; into" and the next hour goes on the wrong half.
+             (is-true (crt.terminal:terminal-alive-p terminal)
+                      "the child must still be running BEFORE we type; ~
+                       exit status ~S"
+                      (crt.terminal:terminal-exit-status terminal))
              (is-true (and (synthesize-key window view "h" 4)
                            (synthesize-key window view "i" 34)
                            (synthesize-key window view (string #\Newline) 36))
                       "AppKit would not build a key event on this machine")
              (let ((seen (wait-for (lambda ()
                                      (let ((text (screen-text terminal)))
-                                       (and (search "GOT[hi]" text) text))))))
+                                       (and (search "HI" text) text))))))
                (is-true seen
                         "the child never saw the keystrokes.~%~
                          screen ~S, terminal ~:[CLOSED~;open~], child ~:[gone (~:*~S)~;alive~]"

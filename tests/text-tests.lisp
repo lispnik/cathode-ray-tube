@@ -510,3 +510,71 @@ the grid comes out the same as an ordinary profile's."
               (crt.text:release-text-renderer plain)
               (crt.text:release-text-renderer wide)
               (crt.text:release-font font)))))))
+
+(test the-size-overlay-appears-fades-and-does-not-clear-the-frame
+  "SizeOverlay.qml, and the three things about it that are easy to get wrong.
+
+It must LOAD rather than clear: it is drawn onto the finished frame, so anything
+it does not cover has to survive.  A pass that cleared would replace the
+terminal with a black screen and a size readout for one second every resize,
+which is a spectacular way to find out.
+
+It must not restart on a size that did not change: resizing a window moves the
+edge many pixels per cell, and a timer restarted on every drag event never
+expires while the mouse is down.
+
+And it must stop: the alpha is what decides both whether it draws and whether the
+dynamic pass keeps the job of presenting the drawable."
+  (when (gpu-or-skip)
+    (let ((font (test-font)))
+      (if (null font)
+          (skip "the bundled fonts are not present")
+          (let ((renderer (crt.text:make-text-renderer :font font :width 200 :height 100))
+                (overlay (crt.text:make-overlay))
+                (target (crt.metal:make-texture :width 200 :height 100
+                                                :label "overlay test")))
+            (unwind-protect
+                 (progn
+                   (is (~= 0d0 (crt.text:overlay-alpha overlay))
+                       "an overlay nobody has told about a resize is invisible")
+                   (crt.text:overlay-note-size overlay 80 25)
+                   (is-true (crt.text:overlay-visible-p overlay) "a resize shows it")
+                   (is (~= 1d0 (crt.text:overlay-alpha overlay)) "at full strength")
+                   (let ((started (crt.text::overlay-shown-at overlay)))
+                     (crt.text:overlay-note-size overlay 80 25)
+                     (is (= started (crt.text::overlay-shown-at overlay))
+                         "the same size must NOT restart the timer")
+                     (crt.text:overlay-note-size overlay 79 25)
+                     (is (/= 0 (crt.text::overlay-shown-at overlay))
+                         "a different size must"))
+                   ;; White first, then the overlay on top of it.
+                   (crt.metal:with-render-pass (encoder target
+                                                :clear '(1d0 1d0 1d0 1d0)
+                                                :label "white"))
+                   (crt.text:render-overlay
+                    overlay renderer (crt.metal:texture-handle target) 200 100
+                    :pixel-format crt.metal:+pixel-format-rgba8unorm+)
+                   (let* ((pixels (crt.metal:texture-bytes target))
+                          (corner (crt.metal:texture-pixel pixels target 2 2))
+                          ;; Inside the box and above the text: the box is twice
+                          ;; the height of the line, so its top quarter is
+                          ;; background only.
+                          (box-only (crt.metal:texture-pixel pixels target 65 40))
+                          ;; A row through the middle of the text.  Sampling ONE
+                          ;; pixel there says nothing -- a glyph is mostly gaps --
+                          ;; so the assertion is on what the row CONTAINS.
+                          (row (loop for x from 62 below 138
+                                     collect (first (crt.metal:texture-pixel
+                                                     pixels target x 50)))))
+                     (is (every (lambda (c) (> c 200)) (subseq corner 0 3))
+                         "the corner must still be the frame underneath, got ~S" corner)
+                     (is (< (first box-only) 200)
+                         "the box must darken what is under it, got ~S" box-only)
+                     (is-true (find-if (lambda (c) (< c 200)) row)
+                              "the text row must cross the box")
+                     (is-true (find-if (lambda (c) (> c 200)) row)
+                              "and the glyphs must be lit against it")))
+              (crt.metal:release-texture target)
+              (crt.text:release-overlay overlay)
+              (crt.text:release-text-renderer renderer)
+              (crt.text:release-font font)))))))

@@ -198,6 +198,9 @@
    #:text-renderer-scale #:text-renderer-cols #:text-renderer-rows
    #:text-renderer-cell-width #:text-renderer-cell-height
    #:text-renderer-font-width #:cell-advance
+   ;; the terminal-size overlay
+   #:overlay #:make-overlay #:release-overlay #:overlay-note-size
+   #:overlay-visible-p #:overlay-alpha #:render-overlay
    #:text-renderer-line-spacing #:line-height #:text-renderer-virtual-size
    #:bundled-font-low-resolution-p #:load-bundled-font
    #:font-for-profile-name #:+profile-font-names+

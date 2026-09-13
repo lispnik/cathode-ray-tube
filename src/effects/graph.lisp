@@ -320,8 +320,8 @@ reads the texel it writes."
         (metal:draw-quad encoder)))
     target))
 
-(defun render-dynamic-pass (graph target static burn-in time &key drawable
-                                                                  (opacity 1.0d0))
+(defun render-dynamic-pass (graph target static burn-in time
+                            &key drawable (present drawable) (opacity 1.0d0))
   (let* ((profile (graph-profile graph))
          (scale (settings:normalized-window-scale (graph-width graph)
                                                   (graph-height graph)))
@@ -371,8 +371,12 @@ reads the texel it writes."
             (u :flickering) (settings:profile-flickering profile)
             (u :frame-size) (* (settings:frame-size profile) scale)
             (u :bloom) (* (settings:profile-bloom profile) 2.5d0))
+      ;; PRESENT rather than DRAWABLE: the two are the same for an ordinary
+      ;; frame, and differ when something is still to be drawn ON TOP of this one
+      ;; -- the size overlay.  DRAWABLE decides the pixel format either way;
+      ;; only the handing-over is deferred.
       (metal:with-render-pass (encoder target :clear '(0d0 0d0 0d0 1d0)
-                                              :present drawable :label "dynamic")
+                                              :present present :label "dynamic")
         (metal:use-pipeline encoder pipeline)
         ;; The vertex stage samples the noise texture -- the per-frame RNG runs
         ;; there, four invocations instead of one per pixel.
@@ -394,7 +398,8 @@ reads the texel it writes."
 
 ;;; The whole thing --------------------------------------------------------------------
 
-(defun render-effects (graph source target &key drawable (time 0.0d0) painted
+(defun render-effects (graph source target &key drawable (present drawable)
+                                                (time 0.0d0) painted
                                                 virtual-width virtual-height)
   "Run the chain from SOURCE (the terminal text) into TARGET.
 
@@ -415,5 +420,5 @@ since the last frame, and the only thing that advances the burn-in accumulator."
                         (graph-bloom graph)))
              (static (render-static-pass graph source bloom)))
         (render-dynamic-pass graph target static burn-in time
-                             :drawable drawable
+                             :drawable drawable :present present
                              :opacity (settings:window-alpha profile))))))
