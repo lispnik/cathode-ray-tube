@@ -248,3 +248,42 @@ called that for a reason: at 0.7 it is the profile the setting exists for."
     (is (~~ 0.91d0 (crt.settings:window-alpha
                     (crt.settings:find-profile "Ghost Terminal")))
         "0.7 * 0.3 + 0.7")))
+
+(test a-custom-profile-survives-being-saved-and-found-again
+  "Save as..., then pick it from the list.
+
+The settings window's Save writes the edited profile as upstream's own JSON into
+the settings file, and the profile pop-up offers ALL-PROFILES rather than the
+fourteen built-ins.  Those two have to agree or a saved profile is unreachable
+from the window that saved it -- which is how SET-SESSION-PROFILE came to be
+looking things up with FIND-PROFILE, which only knows the built-ins."
+  (let ((settings (crt.settings:copy-settings crt.settings:*settings*)))
+    (unwind-protect
+         (let ((edited (copy-structure (crt.settings:find-profile "Default Amber"))))
+           (setf (crt.settings:profile-name edited) "Test Amber"
+                 (crt.settings:profile-bloom edited) 0.375d0
+                 (crt.settings:profile-font-color edited) "#00ff00")
+           (crt.settings:save-custom-profile "Test Amber" edited)
+           (let ((names (mapcar #'crt.settings:profile-name
+                                (crt.settings:all-profiles))))
+             (is-true (member "Test Amber" names :test #'string=)
+                      "a saved profile must appear in the list, got ~S" names)
+             (is (= (+ 14 1) (length names))
+                 "the fourteen built-ins and one of ours"))
+           (let ((found (crt.settings:find-any-profile "Test Amber")))
+             (is-true found "and must be findable by name")
+             (is (~~ 0.375d0 (crt.settings:profile-bloom found))
+                 "with what was saved in it")
+             (is (string= "#00ff00" (crt.settings:profile-font-color found))
+                 "colours included"))
+           (is-false (crt.settings:builtin-profile-p "Test Amber")
+                     "and must not claim to be a built-in, or editing it would
+copy every time instead of editing in place")
+           ;; The built-in it was copied from is untouched.
+           (is (string= "#ff8100" (crt.settings:profile-font-color
+                                   (crt.settings:find-profile "Default Amber")))
+               "Default Amber must be exactly as it was")
+           (crt.settings:remove-custom-profile "Test Amber")
+           (is-false (crt.settings:find-any-profile "Test Amber")
+                     "and Remove must remove it"))
+      (setf crt.settings:*settings* settings))))

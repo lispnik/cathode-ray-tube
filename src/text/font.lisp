@@ -273,6 +273,69 @@ this build does not ship, and falling back to the default is a better answer
 than refusing to open the window."
   (cdr (assoc name +profile-font-names+ :test #'string-equal)))
 
+(defparameter +font-display-names+
+  '((:terminess          . "Terminess")
+    (:bigblue-terminal   . "BigBlue Terminal")
+    (:fixedsys-excelsior . "Fixedsys Excelsior")
+    (:greybeard          . "Greybeard")
+    (:commodore-pet      . "Commodore PET")
+    (:gohu               . "Gohu 11")
+    (:cozette            . "Cozette")
+    (:unscii-8           . "Unscii 8")
+    (:unscii-8-thin      . "Unscii 8 Thin")
+    (:unscii-16          . "Unscii 16")
+    (:apple-ii           . "Apple ][")
+    (:atari-400          . "Atari 400-800")
+    (:commodore-64       . "Commodore 64")
+    (:ibm-ega-8x8        . "IBM EGA 8x8")
+    (:ibm-vga-8x16       . "IBM VGA 8x16")
+    (:departure-mono     . "Departure Mono")
+    (:terminess-hi       . "Terminess")
+    (:hack               . "Hack")
+    (:fira-code          . "Fira Code")
+    (:iosevka            . "Iosevka")
+    (:jetbrains-mono     . "JetBrains Mono")
+    (:ibm-3278           . "IBM 3278")
+    (:source-code-pro    . "Source Code Pro")
+    (:opendyslexic       . "OpenDyslexic"))
+  "What a face is CALLED, as against what a profile file calls it.
+
+addBundledFont's second argument, transcribed: the settings window shows these
+and the file records the FONTNAME beside them.  Two of them are `Terminess',
+which is upstream's own doing -- the scaled and unscaled entries are the same
+design offered twice, and the two are never in the same list because
+rasterisation decides which one is.")
+
+(defun font-display-name-for (face)
+  "FACE's human name, or its keyword printed if the table has no row."
+  (or (cdr (assoc face +font-display-names+))
+      (string-capitalize (symbol-name face))))
+
+(defun profile-name-for-display (display)
+  "The fontName a profile should record for the face DISPLAY names.
+
+The inverse of FONT-DISPLAY-NAME-FOR through the keyword, and the reason the
+settings window can show `Commodore PET' while the file says
+COMMODORE_PET_SCALED -- which is what makes the file readable by both programs."
+  (let ((face (car (rassoc display +font-display-names+ :test #'string=))))
+    (or (car (rassoc face +profile-font-names+))
+        display)))
+
+(defun bundled-font-display-names (&key modern)
+  "The faces to offer, as names a person would recognise.
+
+MODERN picks the outline faces over the bitmap ones, which is upstream's
+rasterisation filter: `modernMode == !font.lowResolutionFont'
+(fontmanager.cpp:441).  Offering all twenty-four at once would let you choose a
+32-pixel outline face in a profile that magnifies bitmaps, which is a
+combination that has no sensible rendering."
+  (let ((wanted '()))
+    (dolist (entry +bundled-fonts+ (nreverse wanted))
+      (let ((face (first entry))
+            (low-resolution (fourth entry)))
+        (when (eq (not modern) (and low-resolution t))
+          (push (font-display-name-for face) wanted))))))
+
 (defun bundled-font-path (name)
   (let ((entry (assoc name +bundled-fonts+)))
     (unless entry (error "No bundled font named ~S." name))

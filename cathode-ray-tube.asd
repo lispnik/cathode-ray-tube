@@ -116,7 +116,9 @@ and terminal emulation by a vendored libvterm."
                    (:file "session")
                    (:file "geometry")
                    (:file "actions")
-                   (:file "mouse")))
+                   (:file "mouse")
+                   (:file "controls")
+                   (:file "settings-window")))
      (:file "main")))))
 
 (asdf:defsystem #:cathode-ray-tube/portable-tests

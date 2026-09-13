@@ -52,6 +52,9 @@ menu is built first."
 
 (define-action "crtNothing:" () nil)
 
+(define-action "crtShowSettings:" ()
+  (show-settings-window))
+
 ;;; Edit ---------------------------------------------------------------------------
 
 (define-action "crtCopy:" (session)

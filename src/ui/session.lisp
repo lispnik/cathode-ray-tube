@@ -588,12 +588,15 @@ the inside like a setting that worked."
                        (not (crt.settings:window-transparent-p profile))))))
 
 (defun set-session-profile (session name)
-  "Switch profiles.  The pipelines for the new specialisation compile once."
-  (let ((profile (or (crt.settings:find-profile name)
+  "Switch profiles.  The pipelines for the new specialisation compile once.
+
+FIND-ANY-PROFILE, so the user's own count: a saved profile that could not be
+selected again would be unreachable from the window that saved it."
+  (let ((profile (or (crt.settings:find-any-profile name)
                      (error "No profile named ~S." name))))
     (setf (session-profile session) profile)
     (when (session-graph session)
-      (crt.effects::set-graph-profile (session-graph session) profile))
+      (crt.effects:set-graph-profile (session-graph session) profile))
     ;; The face and the margin are the profile's too, so switching look means
     ;; rebuilding the renderer -- not only re-specialising the shaders.
     (setf (session-margin session) (float (crt.settings:margin profile) 1.0))

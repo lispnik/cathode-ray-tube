@@ -470,3 +470,79 @@ chain and the magnification both ask a table a question it cannot answer")
                        "and it must be the default face, got ~S" face)
                    (is (>= scale 1) "magnified like the bundled face it now is"))
               (crt.text:release-font font))))))))
+
+(defun tab-controls (window label class-name)
+  "Every subview of WINDOW's tab LABEL whose class is CLASS-NAME, in order."
+  (let* ((tabs (crt.ui:settings-window-tabs window))
+         (count (objc:invoke-into 'integer tabs "numberOfTabViewItems"))
+         (found '()))
+    (dotimes (i count (nreverse found))
+      (let ((item (objc:invoke tabs "tabViewItemAtIndex:" i)))
+        (when (string= label (objc:invoke-into 'string item "label"))
+          (let* ((document (objc:invoke (objc:invoke item "view") "documentView"))
+                 (subviews (objc:invoke document "subviews"))
+                 (n (objc:invoke-into 'integer subviews "count")))
+            (dotimes (j n)
+              (let ((view (objc:invoke subviews "objectAtIndex:" j)))
+                (when (string= class-name (objc:objc-class-name
+                                           (objc:invoke view "class")))
+                  (push view found))))))))))
+
+(defun drive-control (control)
+  "Send CONTROL's action the way AppKit would when a person moves it."
+  (objc:invoke (objc:objc-object-pointer (crt.ui::control-target))
+               "crtControlChanged:" (objc:objc-object-pointer control)))
+
+(test the-settings-window-edits-a-copy-and-not-the-builtin
+  "Four tabs of live controls, and the one thing that must never happen.
+
+FIND-PROFILE hands every caller the SAME structure -- the fourteen built-ins are
+a table, not fourteen copies -- so a settings window that edited the session's
+profile in place would rewrite Default Amber for every other window and for the
+rest of the process, and then save it to disk on the next write.  Nothing about
+that would look like a bug until someone noticed their amber had gone green.
+
+So the first edit copies, and the assertion is on the TABLE rather than on the
+session: the session having the new value proves the control works, and the
+built-in still having the old one proves it works safely."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let ((session (crt.ui:make-session :width 480 :height 320
+                                        :profile "Default Amber"
+                                        :command '("/bin/sh" "-c" "sleep 30"))))
+      (unwind-protect
+           (let ((window (crt.ui:show-settings-window))
+                 (builtin (crt.settings:find-profile "Default Amber")))
+             (is-true window "the settings window must open")
+             (is (= 4 (objc:invoke-into 'integer (crt.ui:settings-window-tabs window)
+                                        "numberOfTabViewItems"))
+                 "General, Terminal, Effects, Advanced")
+             (let ((sliders (tab-controls window "Effects" "NSSlider"))
+                   (before (crt.settings:profile-bloom builtin)))
+               (is (= 11 (length sliders))
+                   "SettingsEffectsTab.qml has eleven; got ~D" (length sliders))
+               ;; The first is Bloom.  Move it somewhere it certainly was not.
+               (let ((bloom (first sliders))
+                     (target (if (> before 0.5d0) 0.125d0 0.875d0)))
+                 (objc:invoke bloom "setDoubleValue:" target)
+                 (drive-control bloom)
+                 (is (< (abs (- target (crt.settings:profile-bloom
+                                        (crt.ui:session-profile session))))
+                        1d-6)
+                     "the session must have taken the new value")
+                 (is (= before (crt.settings:profile-bloom builtin))
+                     "and the BUILT-IN must be untouched: it is shared by every
+window and by the profile table itself")
+                 (is (not (eq builtin (crt.ui:session-profile session)))
+                     "which means the session is no longer holding the built-in")))
+             ;; A slider that only a shader reads must not have rebuilt the grid.
+             (let ((sliders (tab-controls window "Effects" "NSSlider"))
+                   (cols (crt.terminal:terminal-cols (crt.ui:session-terminal session))))
+               (let ((jitter (fourth sliders)))
+                 (objc:invoke jitter "setDoubleValue:" 0.4d0)
+                 (drive-control jitter)
+                 (is (= cols (crt.terminal:terminal-cols
+                              (crt.ui:session-terminal session)))
+                     "an effects slider must not resize the terminal"))))
+        (crt.ui:end-session session)))))

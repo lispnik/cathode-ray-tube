@@ -200,6 +200,7 @@
    #:text-renderer-font-width #:text-renderer-fallbacks #:cell-advance
    #:bundled-font-fallback #:font-fallback-chain #:load-family-font
    #:system-monospace-families
+   #:font-display-name-for #:profile-name-for-display #:bundled-font-display-names
    #:*system-fallback-family* #:font-for-character
    ;; the terminal-size overlay
    #:overlay #:make-overlay #:release-overlay #:overlay-note-size
@@ -217,7 +218,7 @@
                     (#:settings #:cathode-ray-tube.settings))
   (:export
    #:graph #:graph-p #:make-graph #:release-graph #:resize-graph
-   #:set-graph-quality
+   #:set-graph-quality #:set-graph-profile #:invalidate-frame
    #:render-effects #:graph-profile #:graph-quality
    #:graph-window-scaling #:graph-bloom-quality #:graph-burn-in-quality
    #:+k-raster-mode+ #:+k-burn-in+ #:+k-display-frame+ #:+k-chroma+
@@ -241,6 +242,11 @@
    #:view-resized-p #:view-key-handler #:view-mouse-handlers #:event-key-string
    #:on-main-thread #:drain-main-thread-queue
    #:session #:session-p #:make-session #:end-session #:run-terminal
+   ;; settings window
+   #:show-settings-window #:settings-window #:settings-window-p
+   #:settings-window-handle #:settings-window-tabs #:settings-window-session
+   #:settings-window-profile #:apply-quality-settings #:apply-overlay-setting
+   #:editable-profile #:apply-profile-edit
    #:session-window #:session-view #:session-terminal #:session-renderer
    #:session-font #:session-margin #:profile-font
    #:*sessions* #:*default-font* #:*default-profile*

@@ -78,6 +78,11 @@ after the application with About and Quit in it."
     (let ((app-menu (submenu bar name)))
       (menu-item app-menu (format nil "About ~A" name) "crtAbout:" nil)
       (menu-separator app-menu)
+      ;; Comma, which is the macOS convention and not upstream's -- its settings
+      ;; window opens from a View menu item, because Qt has no application menu
+      ;; to put it in.  Anyone on this platform will try Cmd-, first.
+      (menu-item app-menu "Settings..." "crtShowSettings:" ",")
+      (menu-separator app-menu)
       (menu-item app-menu (format nil "Hide ~A" name) "hide:" "h" :target nil)
       (menu-item app-menu "Hide Others" "hideOtherApplications:" "h"
                  :modifiers (logior +modifier-command+ +modifier-option+)
