@@ -22,25 +22,110 @@
 
 (defvar *delegate* nil)
 
-(defun make-menu-bar (&optional (name "cathode-ray-tube"))
-  "The minimum menu bar an application needs to be quittable by Cmd-Q.
+(defun menu-item (menu title selector key &key (modifiers nil) (target t)
+                                                    (state nil) tag)
+  "One item, targeted at the action object.
 
-Without a menu bar AppKit gives the application no key-equivalent handling at
-all, so Cmd-Q does nothing and the only way out is the window's close button.
-The full menu arrives with the rest of the UI in M4."
-  (let* ((main (objc:invoke (objc:invoke "NSMenu" "alloc") "init"))
-         (app-item (objc:invoke (objc:invoke "NSMenuItem" "alloc") "init"))
-         (app-menu (objc:invoke (objc:invoke "NSMenu" "alloc") "init"))
-         (quit (objc:invoke (objc:invoke "NSMenuItem" "alloc")
-                            "initWithTitle:action:keyEquivalent:"
-                            (format nil "Quit ~A" name)
-                            (objc:coerce-to-selector "terminate:")
-                            "q")))
-    (objc:invoke app-menu "addItem:" quit)
-    (objc:invoke app-item "setSubmenu:" app-menu)
-    (objc:invoke main "addItem:" app-item)
-    (objc:invoke (objc.runloop:shared-application) "setMainMenu:" main)
-    main))
+KEY is the key equivalent as a lowercase string; MODIFIERS defaults to Command
+alone, which is what a bare key equivalent means.  The TARGET is set explicitly
+because the responder chain cannot find behaviour that lives in a Lisp
+structure -- see actions.lisp."
+  (let ((item (objc:invoke (objc:invoke "NSMenuItem" "alloc")
+                           "initWithTitle:action:keyEquivalent:"
+                           title
+                           (if selector
+                               (objc:coerce-to-selector selector)
+                               (cffi:null-pointer))
+                           (or key ""))))
+    (when modifiers (objc:invoke item "setKeyEquivalentModifierMask:" modifiers))
+    (when (and target selector)
+      (objc:invoke item "setTarget:" (objc:objc-object-pointer (menu-target))))
+    (when state (objc:invoke item "setState:" state))
+    (when tag (objc:invoke item "setTag:" tag))
+    (objc:invoke menu "addItem:" item)
+    item))
+
+(defun menu-separator (menu)
+  (objc:invoke menu "addItem:" (objc:invoke "NSMenuItem" "separatorItem")))
+
+(defun submenu (bar title)
+  "A top-level menu.  Returns the NSMenu to fill in.
+
+The TITLE has to be set on the NSMenu and not only on the item: AppKit reads the
+menu's title for the application menu and for the Window and Help menus it
+adopts by name, and an untitled menu quietly loses those behaviours."
+  (let ((item (objc:invoke (objc:invoke "NSMenuItem" "alloc") "init"))
+        (menu (objc:invoke (objc:invoke "NSMenu" "alloc") "initWithTitle:" title)))
+    (objc:invoke item "setSubmenu:" menu)
+    (objc:invoke bar "addItem:" item)
+    menu))
+
+;;; NSEventModifierFlags, for key equivalents.
+(defconstant +key-command+ +modifier-command+)
+(defconstant +key-command-shift+ (logior +modifier-command+ +modifier-shift+))
+
+(defun make-menu-bar (&optional (name "cathode-ray-tube"))
+  "The menu bar.
+
+Not decoration: without one, AppKit does no key-equivalent handling at all, so
+Cmd-Q, Cmd-C and Cmd-V are dead keys rather than commands.  The structure
+follows cool-retro-term's WindowMenu.qml -- File, Edit, View, Profiles, Help --
+with the macOS conventions it cannot express, chiefly an application menu named
+after the application with About and Quit in it."
+  (let ((bar (objc:invoke (objc:invoke "NSMenu" "alloc") "init")))
+    ;; The application menu.  Its title is ignored -- AppKit always shows the
+    ;; process name in bold -- but the FIRST menu is always this one.
+    (let ((app-menu (submenu bar name)))
+      (menu-item app-menu (format nil "About ~A" name) "crtAbout:" nil)
+      (menu-separator app-menu)
+      (menu-item app-menu (format nil "Hide ~A" name) "hide:" "h" :target nil)
+      (menu-item app-menu "Hide Others" "hideOtherApplications:" "h"
+                 :modifiers (logior +modifier-command+ +modifier-option+)
+                 :target nil)
+      (menu-item app-menu "Show All" "unhideAllApplications:" nil :target nil)
+      (menu-separator app-menu)
+      (menu-item app-menu (format nil "Quit ~A" name) "terminate:" "q"
+                 :target nil))
+
+    (let ((file (submenu bar "File")))
+      (menu-item file "New Window" "crtNewWindow:" "n")
+      (menu-separator file)
+      (menu-item file "Close" "crtCloseWindow:" "w"))
+
+    (let ((edit (submenu bar "Edit")))
+      (menu-item edit "Copy" "crtCopy:" "c")
+      (menu-item edit "Paste" "crtPaste:" "v")
+      (menu-separator edit)
+      (menu-item edit "Select All" "crtSelectAll:" "a"))
+
+    (let ((view (submenu bar "View")))
+      ;; -toggleFullScreen: is NSWindow's own and needs no target: the responder
+      ;; chain finds the key window, which is exactly the right one.
+      (menu-item view "Enter Full Screen" "toggleFullScreen:" "f"
+                 :modifiers (logior +modifier-command+ +modifier-control+)
+                 :target nil)
+      (menu-separator view)
+      (menu-item view "Zoom In" "crtZoomIn:" "+")
+      (menu-item view "Zoom Out" "crtZoomOut:" "-")
+      (menu-item view "Actual Size" "crtZoomReset:" "0")
+      (menu-separator view)
+      (menu-item view "Effects" "crtToggleEffects:" nil :state 1))
+
+    ;; The Profiles menu is the only way to change look at run time, and its
+    ;; absence was the most visible thing missing from this program.
+    (let ((profiles (submenu bar "Profiles")))
+      (dolist (profile crt.settings:+profiles+)
+        (menu-item profiles (crt.settings:profile-name profile)
+                   "crtSetProfile:" nil)))
+
+    (let ((window (submenu bar "Window")))
+      (menu-item window "Minimize" "performMiniaturize:" "m" :target nil)
+      (menu-item window "Zoom" "performZoom:" nil :target nil)
+      ;; Named to AppKit, which then adds the window list and keeps it current.
+      (objc:invoke (objc.runloop:shared-application) "setWindowsMenu:" window))
+
+    (objc:invoke (objc.runloop:shared-application) "setMainMenu:" bar)
+    bar))
 
 (defun gradient-frame (view texture drawable time)
   "The M1 draw function: a gradient, at vsync.

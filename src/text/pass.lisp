@@ -196,11 +196,16 @@ what a terminal defaulting to 80x25 wants."
       (f 32 u0) (f 36 v0)
       (f 40 u1) (f 44 v1))))
 
-(defun cell-colors (cell default-fg default-bg)
-  "(values FG-R FG-G FG-B BG-R BG-G BG-B) in 0..1, reverse video applied."
+(defun cell-colors (cell default-fg default-bg &optional selected)
+  "(values FG-R FG-G FG-B BG-R BG-G BG-B) in 0..1, reverse video applied.
+
+SELECTED inverts as well, and inverting twice cancels -- so selecting
+already-reversed text shows it the right way round, which is what makes a
+selection readable over a highlighted region."
   (multiple-value-bind (fr fg fb) (vt:resolve-color (vt:cell-fg cell) :default default-fg)
     (multiple-value-bind (br bg bb) (vt:resolve-color (vt:cell-bg cell) :default default-bg)
-      (if (vt:attr-set-p (vt:cell-attrs cell) vt:+attr-reverse+)
+      (if (alexandria:xor (vt:attr-set-p (vt:cell-attrs cell) vt:+attr-reverse+)
+                          selected)
           (values (/ br 255.0) (/ bg 255.0) (/ bb 255.0)
                   (/ fr 255.0) (/ fg 255.0) (/ fb 255.0))
           (values (/ fr 255.0) (/ fg 255.0) (/ fb 255.0)
@@ -219,7 +224,8 @@ one pipeline, one texture binding and one draw."
 
 (defun build-instances (renderer snapshot &key (default-fg '(229 229 229))
                                                (default-bg '(0 0 0))
-                                               (blink-on t) (cursor-on t))
+                                               (blink-on t) (cursor-on t)
+                                               selected-p)
   "Fill the instance buffer from SNAPSHOT.  Returns the instance count.
 
 Backgrounds first, then glyphs: within one draw call Metal respects primitive
@@ -249,7 +255,8 @@ second pass."
           (let ((cell (aref line col)))
             (when (plusp (vt:cell-width cell))
               (multiple-value-bind (fr fg fb br bg bb)
-                  (cell-colors cell default-fg default-bg)
+                  (cell-colors cell default-fg default-bg
+                               (and selected-p (funcall selected-p row col)))
                 (declare (ignore fr fg fb))
                 ;; Alpha 1 inside the content rectangle.  The static pass uses
                 ;; the blurred alpha as its bloom mask, so a background that
@@ -283,7 +290,9 @@ second pass."
                                          :italic (vt:attr-set-p attrs
                                                                 vt:+attr-italic+))))
                 (when (plusp (glyph-width glyph))
-                  (multiple-value-bind (fr fg fb) (cell-colors cell default-fg default-bg)
+                  (multiple-value-bind (fr fg fb)
+                      (cell-colors cell default-fg default-bg
+                                   (and selected-p (funcall selected-p row col)))
                     (write-instance
                      buffer n fr fg fb 1.0
                      (+ margin (* col cw) (* scale (glyph-bearing-x glyph)))
@@ -306,7 +315,9 @@ second pass."
                        (or (vt:attr-set-p attrs vt:+attr-underline+)
                            (vt:attr-set-p attrs vt:+attr-strike+))
                        (or blink-on (not (vt:attr-set-p attrs vt:+attr-blink+))))
-              (multiple-value-bind (fr fg fb) (cell-colors cell default-fg default-bg)
+              (multiple-value-bind (fr fg fb)
+                  (cell-colors cell default-fg default-bg
+                               (and selected-p (funcall selected-p row col)))
                 (let* ((x (+ margin (* col cw)))
                        (w (* cw (max 1 (vt:cell-width cell))))
                        (top (+ margin (* row ch)))
@@ -353,12 +364,17 @@ second pass."
 
 (defun render-text (renderer snapshot &key (buffer nil) (default-fg '(229 229 229))
                                            (default-bg '(0 0 0)) (blink-on t)
-                                           (cursor-on t))
-  "Draw SNAPSHOT into the renderer's target.  Returns the target."
+                                           (cursor-on t) selected-p)
+  "Draw SNAPSHOT into the renderer's target.  Returns the target.
+
+SELECTED-P, when given, is called with a row and a column and says whether that
+cell is selected.  A predicate rather than a range, so the renderer needs to
+know nothing about how a selection is shaped."
   (let* ((target (text-renderer-target renderer))
          (count (build-instances renderer snapshot
                                  :default-fg default-fg :default-bg default-bg
-                                 :blink-on blink-on :cursor-on cursor-on)))
+                                 :blink-on blink-on :cursor-on cursor-on
+                                 :selected-p selected-p)))
     ;; BEFORE the pass, always: a glyph seen for the first time this frame was
     ;; allocated a slot while instances were being built, and a draw that
     ;; sampled it before the upload would read whatever was in the atlas before.

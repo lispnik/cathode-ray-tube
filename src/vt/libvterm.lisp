@@ -186,9 +186,17 @@ A title arrives in one fragment when it is short and several when it is not, and
 
 (define-vt-callback vt-settermprop :int
     ((prop :int) (value :pointer) (user :pointer))
+  ;; VTermProp: 1 cursorvisible, 2 cursorblink, 3 altscreen, 4 title,
+  ;; 5 iconname, 6 reverse, 7 cursorshape, 8 mouse.
   (case prop
     (1 (setf (vt-cursor-visible vt) (plusp (cffi:mem-ref value :int))))
-    (4 (accumulate-title vt value)))
+    (3 (setf (vt-alternate-screen-p vt) (plusp (cffi:mem-ref value :int))))
+    (4 (accumulate-title vt value))
+    ;; VTERM_PROP_MOUSE is an ENUM, not a boolean: 0 none, 1 click, 2 drag,
+    ;; 3 move.  Anything but 0 means the child wants events, and treating it as
+    ;; a boolean would be wrong only for a child that turned reporting off by
+    ;; setting it to 0 -- which is exactly how it IS turned off.
+    (8 (setf (vt-mouse-reporting-p vt) (plusp (cffi:mem-ref value :int)))))
   1)
 
 ;;; The output callback is not a screen callback and takes no structure, so it
@@ -412,6 +420,18 @@ width 0 tells it.")
                (dotimes (i written octets)
                  (setf (aref octets i) (cffi:mem-aref buffer :uint8 i))))
              :encoding :utf-8 :errorp nil))))))
+
+(defmethod vt-mouse-move ((vt libvterm-vt) row col modifiers)
+  (%vterm-mouse-move (vt-handle vt) row col modifiers))
+
+(defmethod vt-mouse-button ((vt libvterm-vt) button pressed modifiers)
+  (%vterm-mouse-button (vt-handle vt) button (and pressed t) modifiers))
+
+(defmethod vt-start-paste ((vt libvterm-vt))
+  (%vterm-keyboard-start-paste (vt-handle vt)))
+
+(defmethod vt-end-paste ((vt libvterm-vt))
+  (%vterm-keyboard-end-paste (vt-handle vt)))
 
 (defmethod vt-scrollback-length ((vt libvterm-vt))
   (fill-pointer (vt-scrollback vt)))

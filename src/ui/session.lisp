@@ -18,6 +18,14 @@
   (sampler nil)
   (margin 8.0 :type single-float)
   (title nil)
+  (selection nil)
+  (dragging nil)
+  (scale 1 :type (integer 1 16))
+  ;; Zoom, as a multiplier on whatever the face would otherwise be drawn at.
+  ;; Upstream's fontScaling runs 0.25 to 2.50 in steps of 0.05; the steps here
+  ;; are coarser for the bitmap faces because their magnification is an integer
+  ;; -- see APPLY-FONT-SCALING.
+  (font-scaling 1.0d0 :type double-float)
   ;; With no effects the text target is blitted straight to the drawable.  Not
   ;; scaffolding: it is the honest "effects off" path, and it is what the
   ;; Boring profile amounts to.
@@ -83,7 +91,11 @@ them in that order and separately."
                       ;; steady block is what a phosphor tube looks like.
                       :cursor-on (or (not (crt.settings:profile-blinking-cursor
                                            (session-profile session)))
-                                     (blink-phase clock)))))
+                                     (blink-phase clock))
+                      :selected-p (let ((selection (session-selection session)))
+                                    (when selection
+                                      (lambda (row col)
+                                        (cell-selected-p selection row col)))))))
         (multiple-value-bind (vw vh) (crt.text:text-renderer-virtual-size renderer)
          (if (and (session-effects session) (session-graph session))
             (crt.effects:render-effects
@@ -233,6 +245,9 @@ whatever size the window is dragged to."
     (make-session-in-window loaded scale margin width height title command
                             chosen effects)))
 
+(defconstant +min-font-scaling+ 0.25d0)
+(defconstant +max-font-scaling+ 2.5d0)
+
 (defun make-session-in-window (loaded scale margin width height title command
                                profile effects)
   (let* ((window (make-crt-window :width width :height height :title title
@@ -247,6 +262,7 @@ whatever size the window is dragged to."
              (session (%make-session :window window :view view
                                      :renderer renderer :font loaded
                                      :margin (float margin 1.0)
+                                     :scale scale
                                      :profile profile :effects effects)))
         (when effects
           (setf (session-graph session)
@@ -270,8 +286,19 @@ whatever size the window is dragged to."
         ;; nothing else notices it was never set.
         (setf (view-key-handler view)
               (lambda (string)
+                ;; Typing returns to the live screen, as every terminal does:
+                ;; a keystroke that vanished into a scrolled-back view would
+                ;; look like the terminal had stopped responding.
+                (crt.terminal:terminal-scroll-to-bottom (session-terminal session))
                 (crt.terminal:terminal-send-string (session-terminal session)
                                                    string)))
+        (setf (view-mouse-handlers view)
+              (list :down (lambda (event) (handle-mouse-down session event))
+                    :up (lambda (event) (handle-mouse-up session event))
+                    :dragged (lambda (event) (handle-mouse-dragged session event))
+                    :double (lambda (event) (handle-double-click session event))
+                    :right-down (lambda (event) (show-context-menu session event))
+                    :wheel (lambda (event) (handle-scroll-wheel session event))))
         (push session *sessions*)
         (show-crt-window window)
         session))))
@@ -307,6 +334,110 @@ whatever size the window is dragged to."
   ;; no summary, twice.
   (values))
 
+;;; Zoom -------------------------------------------------------------------------
+
+(defun apply-font-scaling (session)
+  "Rebuild the text renderer at the session's current zoom.
+
+Two different mechanisms, because the two kinds of face want different things.
+An OUTLINE face is rasterised at whatever size is asked for, so zoom changes the
+pixel size and is smooth.  A BITMAP face has one true size and is magnified by a
+whole number, so zoom changes that number -- which is coarse, and is the honest
+consequence of magnifying bitmaps by integers rather than interpolating them."
+  (let* ((profile (session-profile session))
+         (face (profile-font profile))
+         (low-res (crt.text:bundled-font-low-resolution-p face))
+         (zoom (session-font-scaling session))
+         (base (font-scale-for face)))
+    (multiple-value-bind (pixel-size scale)
+        (if low-res
+            ;; UTIL:QROUND, not CL:ROUND.  With a base of 2 and a zoom of 1.25
+            ;; the product is exactly 2.5, and CL rounds half to EVEN -- so
+            ;; zooming in was a no-op and the next step jumped by a whole
+            ;; multiple.  Third time this rounding rule has bitten in this
+            ;; program; it is why QROUND exists.
+            (values (crt.text:bundled-font-native-size face)
+                    (max 1 (util:qround (* base zoom))))
+            (values (max 6 (util:qround (* 24 zoom))) 1))
+      (let ((font (crt.text:load-bundled-font face :pixel-size pixel-size)))
+        (unless font (return-from apply-font-scaling nil))
+        (when (session-font session) (crt.text:release-font (session-font session)))
+        (crt.text:release-text-renderer (session-renderer session))
+        (destructuring-bind (dw dh) (view-drawable-size (session-view session))
+          (setf (session-font session) font
+                (session-scale session) scale
+                (session-renderer session)
+                (crt.text:make-text-renderer :font font :width dw :height dh
+                                             :scale scale
+                                             :margin (session-margin session)
+                                             :line-spacing +default-line-spacing+))
+          (fit-terminal-to-view session))
+        t))))
+
+(defun set-font-scaling (session zoom)
+  (let ((clamped (max +min-font-scaling+ (min +max-font-scaling+ zoom))))
+    (unless (= clamped (session-font-scaling session))
+      (setf (session-font-scaling session) clamped)
+      (apply-font-scaling session))
+    clamped))
+
+(defun zoom-step (session direction)
+  "Change the zoom until something actually changes.
+
+Stepping the MULTIPLIER is not enough on its own: a bitmap face's magnification
+is a whole number, so a quarter-step either does nothing or jumps by a whole
+multiple depending on where the rounding lands.  This walks in small increments
+until the effective size moves, which makes one keystroke mean one visible
+change on both kinds of face."
+  (let* ((before (crt.text:text-renderer-scale (session-renderer session)))
+         (before-size (crt.text:font-pixel-size (session-font session)))
+         (step (* direction 0.1d0)))
+    (loop repeat 24
+          for zoom = (+ (session-font-scaling session) step)
+          while (<= +min-font-scaling+ zoom +max-font-scaling+)
+          do (set-font-scaling session zoom)
+             (when (or (/= before (crt.text:text-renderer-scale
+                                   (session-renderer session)))
+                       (/= before-size (crt.text:font-pixel-size
+                                        (session-font session))))
+               (return t))
+          finally (return nil))))
+
+(defun zoom-in (session) (zoom-step session 1))
+(defun zoom-out (session) (zoom-step session -1))
+
+(defun zoom-reset (session)
+  (set-font-scaling session 1.0d0))
+
+;;; Scrolling ----------------------------------------------------------------------
+
+(defun scroll-viewport (session lines)
+  (crt.terminal:terminal-scroll (session-terminal session) lines))
+
+;;; Mouse reporting ------------------------------------------------------------------
+
+(defun vt-modifiers (event)
+  "NSEvent's flags as libvterm's modifier bits: 1 shift, 2 alt, 4 control."
+  (let ((flags (event-modifiers event)) (mods 0))
+    (when (logtest flags +modifier-shift+) (setf mods (logior mods 1)))
+    (when (logtest flags +modifier-option+) (setf mods (logior mods 2)))
+    (when (logtest flags +modifier-control+) (setf mods (logior mods 4)))
+    mods))
+
+(defun report-mouse (session event row col kind)
+  (let ((button (1+ (objc:invoke-into 'integer event "buttonNumber"))))
+    (crt.terminal:terminal-report-mouse
+     (session-terminal session)
+     :row row :col col :button button :pressed (eq kind :press)
+     :modifiers (vt-modifiers event))))
+
+(defun report-wheel (session up lines)
+  "Wheel as buttons 4 and 5, which is what the protocol calls them."
+  (let ((terminal (session-terminal session)))
+    (dotimes (i (min lines 5))
+      (crt.terminal:terminal-report-mouse terminal :button (if up 4 5)
+                                                   :pressed t))))
+
 (defun set-session-profile (session name)
   "Switch profiles.  The pipelines for the new specialisation compile once."
   (let ((profile (or (crt.settings:find-profile name)
@@ -314,6 +445,10 @@ whatever size the window is dragged to."
     (setf (session-profile session) profile)
     (when (session-graph session)
       (crt.effects::set-graph-profile (session-graph session) profile))
+    ;; The face and the margin are the profile's too, so switching look means
+    ;; rebuilding the renderer -- not only re-specialising the shaders.
+    (setf (session-margin session) (float (crt.settings:margin profile) 1.0))
+    (apply-font-scaling session)
     profile))
 
 (defun run-terminal (&key width height (columns *default-columns*)

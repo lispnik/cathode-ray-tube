@@ -45,7 +45,11 @@
    ;; dragged; doing it once per frame is the same result and a fraction of the
    ;; work.
    (resized :initform nil :accessor view-resized-p)
-   (key-handler :initform nil :accessor view-key-handler))
+   (key-handler :initform nil :accessor view-key-handler)
+   ;; The mouse handlers are a plist rather than five slots, because the view
+   ;; does not care what any of them do -- it forwards, and the session decides
+   ;; whether a click is a selection or the child's business.
+   (mouse-handlers :initform nil :accessor view-mouse-handlers))
   (:objc-class-name "CathodeRayTubeView")
   (:objc-superclass-name "NSView"))
 
@@ -90,6 +94,36 @@
     ((self crt-view) (event objc:objc-object-pointer))
   (declare (ignore event))
   nil)
+
+;;; The mouse ---------------------------------------------------------------------
+;;;
+;;; Forwarded, never interpreted.  Whether a click is the user selecting text or
+;;; the child's business depends on modes the view knows nothing about.
+
+(defun call-mouse-handler (view kind event)
+  (let ((handler (getf (view-mouse-handlers view) kind)))
+    (when handler (funcall handler event))))
+
+(macrolet ((mouse-method (selector kind)
+             `(objc:define-objc-method (,selector :void)
+                  ((self crt-view) (event objc:objc-object-pointer))
+                (handling-errors (,selector)
+                  (call-mouse-handler self ,kind event)))))
+  (mouse-method "mouseDown:" :down)
+  (mouse-method "mouseUp:" :up)
+  (mouse-method "mouseDragged:" :dragged)
+  (mouse-method "rightMouseDown:" :right-down)
+  (mouse-method "scrollWheel:" :wheel))
+
+;;; Cocoa sends -mouseDown: for every click and increments clickCount; a
+;;; double-click is the SECOND -mouseDown:, not a separate event.  Routing it
+;;; here keeps that knowledge in the view rather than in every handler.
+(objc:define-objc-method ("mouseDown:" :void)
+    ((self crt-view) (event objc:objc-object-pointer))
+  (handling-errors ("mouseDown:")
+    (if (>= (objc:invoke-into 'integer event "clickCount") 2)
+        (call-mouse-handler self :double event)
+        (call-mouse-handler self :down event))))
 
 ;;; The display link's target.  Named with a prefix because a selector is a
 ;;; process-global name and `stepFrame:' is the sort of thing another framework

@@ -104,7 +104,10 @@ and terminal emulation by a vendored libvterm."
                    (:file "view")
                    (:file "window")
                    (:file "app")
-                   (:file "session")))
+                   (:file "session")
+                   (:file "geometry")
+                   (:file "actions")
+                   (:file "mouse")))
      (:file "main")))))
 
 (asdf:defsystem #:cathode-ray-tube/portable-tests

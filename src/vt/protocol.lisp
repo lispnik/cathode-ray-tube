@@ -17,6 +17,14 @@
    (title :initform nil :accessor vt-title
           :documentation "What OSC 0/2 last said, for the window title.")
    (bell-count :initform 0 :accessor vt-bell-count)
+   (mouse-reporting :initform nil :accessor vt-mouse-reporting-p
+    :documentation "True once the child has asked for mouse events.
+
+Which audience a click belongs to -- the child or the user selecting text -- is
+the child's decision, and this is where it says so.")
+   (alternate-screen :initform nil :accessor vt-alternate-screen-p
+    :documentation "True on the alternate screen, where there is no scrollback
+because a full-screen program owns the whole display.")
    (output-hook :initform nil :accessor vt-output-hook
                 :documentation "Called with an octet vector the terminal wants
 written back to the pty -- a device-status reply, a mouse report.  The pty
@@ -61,6 +69,23 @@ anything else that invalidates what the renderer has cached."))
 
 (defgeneric vt-text (vt start-row end-row &key start-col end-col)
   (:documentation "The text of a rectangle, for copying to the pasteboard."))
+
+(defgeneric vt-mouse-move (vt row col modifiers)
+  (:documentation "Report the pointer's position to the child, if it asked."))
+
+(defgeneric vt-mouse-button (vt button pressed modifiers)
+  (:documentation "Report a button to the child, if it asked.
+
+BUTTON is 1-3 for the three buttons and 4-5 for wheel up and down, which is
+what a terminal's mouse protocol calls them."))
+
+(defgeneric vt-start-paste (vt))
+(defgeneric vt-end-paste (vt)
+  (:documentation "Bracket a paste, so a shell does not execute every newline in
+it the moment it arrives and an editor can tell pasted text from typed text.
+
+These emit nothing unless the child turned bracketed paste on, so they are
+always safe to call."))
 
 (defgeneric vt-scrollback-length (vt))
 (defgeneric vt-scrollback-line (vt n)

@@ -108,6 +108,8 @@
    #:vt-dirty-rows #:vt-dirty-p #:vt-clear-dirty #:vt-damage-all
    #:vt-text #:vt-scrollback-length #:vt-scrollback-line
    #:vt-title #:vt-bell-count #:vt-output-hook
+   #:vt-mouse-reporting-p #:vt-alternate-screen-p
+   #:vt-mouse-move #:vt-mouse-button #:vt-start-paste #:vt-end-paste
    ;; cells
    #:cell #:make-cell #:cell-p #:copy-cell
    #:cell-char #:cell-combining #:cell-width
@@ -143,7 +145,10 @@
    #:terminal-vt #:terminal-pty #:terminal-lock
    #:terminal-rows #:terminal-cols #:terminal-resize
    #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
-   #:terminal-send #:terminal-send-string
+   #:terminal-send #:terminal-send-string #:terminal-paste
+   #:terminal-mouse-reporting-p #:terminal-alternate-screen-p
+   #:terminal-report-mouse #:terminal-scroll #:terminal-scroll-to-bottom
+   #:terminal-scroll-offset #:terminal-scrollback-length
    #:with-terminal-locked #:terminal-take-dirty #:terminal-title
    #:terminal-snapshot #:snapshot #:snapshot-p #:make-snapshot
    #:snapshot-rows #:snapshot-cols #:snapshot-cells #:snapshot-dirty
@@ -162,6 +167,7 @@
    #:font #:font-p #:font-handle #:font-pixel-size #:font-ascent #:font-descent
    #:font-cell-width #:font-cell-height #:font-advance
    #:load-font #:release-font #:bundled-font-path #:+bundled-fonts+
+   #:font-pixel-size
    ;; the atlas
    #:atlas #:atlas-p #:make-atlas #:release-atlas #:atlas-texture
    #:atlas-width #:atlas-height #:atlas-glyph #:glyph
@@ -204,15 +210,29 @@
    #:attach-metal-layer #:start-display-link #:stop-display-link #:step-frame
    #:crt-window #:crt-window-p #:crt-window-handle #:crt-window-view
    #:make-crt-window #:show-crt-window #:close-crt-window #:*windows*
-   #:make-menu-bar #:gradient-frame
-   #:view-resized-p #:view-key-handler #:event-key-string
+   #:make-menu-bar #:menu-item #:menu-separator #:submenu #:gradient-frame
+   #:view-resized-p #:view-key-handler #:view-mouse-handlers #:event-key-string
    #:on-main-thread #:drain-main-thread-queue
    #:session #:session-p #:make-session #:end-session #:run-terminal
    #:session-window #:session-view #:session-terminal #:session-renderer
    #:session-font #:session-margin #:profile-font
    #:*sessions* #:*default-font* #:*default-profile*
    #:*default-columns* #:*default-rows* #:screen-backing-scale
-   #:session-profile #:session-graph #:set-session-profile))
+   #:session-profile #:session-graph #:set-session-profile
+   ;; geometry
+   #:distort-point #:view-point-to-cell
+   ;; selection and the clipboard
+   #:selection #:make-selection #:selection-p #:selection-ordered
+   #:selection-empty-p #:cell-selected-p #:selection-text #:session-selection
+   #:session-dragging #:clear-selection #:copy-selection #:paste-clipboard
+   #:clipboard-string #:set-clipboard-string #:word-bounds
+   #:handle-mouse-down #:handle-mouse-up #:handle-mouse-dragged
+   #:handle-double-click #:handle-scroll-wheel #:show-context-menu
+   ;; zoom and scrolling
+   #:zoom-in #:zoom-out #:zoom-reset #:set-font-scaling #:session-font-scaling
+   #:scroll-viewport #:session-effects
+   ;; menu actions
+   #:menu-target #:key-session #:show-about-panel))
 
 (defpackage #:cathode-ray-tube
   (:use #:cl)

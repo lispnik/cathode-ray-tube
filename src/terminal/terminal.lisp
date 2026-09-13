@@ -79,6 +79,11 @@ place is that this does not allocate once it has warmed up."
    (wake-read :initform -1 :accessor terminal-wake-read)
    (wake-write :initform -1 :accessor terminal-wake-write)
    (snapshot :initform nil :accessor terminal-cached-snapshot)
+   (scroll-offset :initform 0 :accessor terminal-scroll-offset
+    :documentation "How many lines back the viewport is, 0 being live.
+
+libvterm has no viewport of its own -- it hands each scrolled-off line to
+sb_pushline and forgets it -- so scrollback is entirely ours, and so is this.")
    (exit-status :initform nil :accessor terminal-exit-status)
    (on-exit :initarg :on-exit :initform nil :accessor terminal-on-exit)
    (on-title :initarg :on-title :initform nil :accessor terminal-on-title)))
@@ -89,6 +94,12 @@ place is that this does not allocate once it has warmed up."
 (defun terminal-rows (terminal) (vt:vt-rows (terminal-vt terminal)))
 (defun terminal-cols (terminal) (vt:vt-cols (terminal-vt terminal)))
 (defun terminal-title (terminal) (vt:vt-title (terminal-vt terminal)))
+(defun terminal-mouse-reporting-p (terminal)
+  (vt:vt-mouse-reporting-p (terminal-vt terminal)))
+(defun terminal-alternate-screen-p (terminal)
+  (vt:vt-alternate-screen-p (terminal-vt terminal)))
+(defun terminal-scrollback-length (terminal)
+  (vt:vt-scrollback-length (terminal-vt terminal)))
 (defun terminal-alive-p (terminal)
   (and (terminal-running terminal) (null (terminal-exit-status terminal))))
 
@@ -172,6 +183,12 @@ COMMAND defaults to the user's login shell."
        (let ((octets (make-array n :element-type '(unsigned-byte 8))))
          (dotimes (i n) (setf (aref octets i) (cffi:mem-aref buffer :uint8 i)))
          (with-terminal-locked (terminal)
+           ;; New output snaps the viewport back to the bottom.  A terminal that
+           ;; stayed scrolled up while its child wrote would hide the thing the
+           ;; user is waiting for.
+           (unless (zerop (terminal-scroll-offset terminal))
+             (setf (terminal-scroll-offset terminal) 0)
+             (vt:vt-damage-all (terminal-vt terminal)))
            (vt:vt-write (terminal-vt terminal) octets)
            ;; The flag the burn-in pass reads.  Set here, cleared when the
            ;; renderer takes a snapshot.
@@ -223,6 +240,62 @@ Never writes the fd from here: see the header."
 (defun terminal-send-string (terminal string)
   (terminal-send terminal (babel:string-to-octets string :encoding :utf-8)))
 
+(defun terminal-paste (terminal string)
+  "Send STRING as a PASTE rather than as typing.
+
+The brackets go through the VT rather than being written literally, because
+libvterm emits them only when the child has turned bracketed paste ON -- writing
+`ESC[200~' unconditionally would put those six characters into the shell of
+anyone who had not."
+  (with-terminal-locked (terminal)
+    (let ((vt (terminal-vt terminal)))
+      (vt:vt-start-paste vt)
+      (push (babel:string-to-octets string :encoding :utf-8)
+            (terminal-outbound terminal))
+      (vt:vt-end-paste vt)))
+  (wake-reader terminal))
+
+(defun terminal-report-mouse (terminal &key row col button pressed (modifiers 0)
+                                            move)
+  "Tell the child about the mouse, if it has asked to be told.
+
+Emits nothing when the child has not, so callers need not check first."
+  (with-terminal-locked (terminal)
+    (let ((vt (terminal-vt terminal)))
+      (when (vt:vt-mouse-reporting-p vt)
+        ;; Position FIRST, always: the protocol reports a button at wherever the
+        ;; pointer was last said to be, so a press without a preceding move is
+        ;; reported at the previous position.
+        (when (and row col) (vt:vt-mouse-move vt row col modifiers))
+        (unless move
+          (when button (vt:vt-mouse-button vt button pressed modifiers))))))
+  (wake-reader terminal))
+
+;;; Scrollback ----------------------------------------------------------------------
+
+(defun terminal-scroll (terminal lines)
+  "Move the viewport LINES back (positive) or forward (negative).
+
+Clamped to what there is.  Returns the new offset."
+  (let ((vt (terminal-vt terminal)))
+    (with-terminal-locked (terminal)
+      (let* ((available (if (vt:vt-alternate-screen-p vt)
+                            ;; A full-screen program owns the display and its
+                            ;; scrollback is its own business, so there is
+                            ;; nothing here to scroll back INTO.
+                            0
+                            (vt:vt-scrollback-length vt)))
+             (offset (max 0 (min available (+ (terminal-scroll-offset terminal)
+                                              lines)))))
+        (unless (= offset (terminal-scroll-offset terminal))
+          (setf (terminal-scroll-offset terminal) offset)
+          ;; The whole screen is a different picture now.
+          (vt:vt-damage-all vt))
+        offset))))
+
+(defun terminal-scroll-to-bottom (terminal)
+  (terminal-scroll terminal most-negative-fixnum))
+
 ;;; Resizing ------------------------------------------------------------------------
 
 (defun terminal-resize (terminal rows cols)
@@ -261,6 +334,28 @@ kernel's and can.  Doing them together hides the second behind the first."
                                     (setf (aref row c) (vt:make-cell)))))))
                :dirty (make-array rows :element-type 'bit :initial-element 1))))))
 
+(defun fill-row-from-history (row line cols)
+  "Copy a scrollback LINE into ROW, blanking whatever it does not cover.
+
+A history line is as wide as the screen was WHEN IT SCROLLED OFF, which after a
+resize is not the width it is being drawn at."
+  (dotimes (i cols)
+    (let ((cell (aref row i)))
+      (if (and line (< i (length line)))
+          (let ((source (aref line i)))
+            (setf (vt:cell-char cell) (vt:cell-char source)
+                  (vt:cell-combining cell) (vt:cell-combining source)
+                  (vt:cell-width cell) (vt:cell-width source)
+                  (vt:cell-fg cell) (vt:cell-fg source)
+                  (vt:cell-bg cell) (vt:cell-bg source)
+                  (vt:cell-attrs cell) (vt:cell-attrs source)))
+          (setf (vt:cell-char cell) #\Space
+                (vt:cell-combining cell) nil
+                (vt:cell-width cell) 1
+                (vt:cell-fg cell) nil
+                (vt:cell-bg cell) nil
+                (vt:cell-attrs cell) 0)))))
+
 (defun terminal-snapshot (terminal)
   "A copy of what the renderer needs, taken under the lock.
 
@@ -271,9 +366,20 @@ every frame: a terminal at rest copies nothing."
            (vt (terminal-vt terminal))
            (dirty (vt:vt-dirty-rows vt))
            (cells (snapshot-cells snapshot)))
-      (dotimes (row (snapshot-rows snapshot))
-        (when (= 1 (sbit dirty row))
-          (vt:vt-row-cells vt row (aref cells row))))
+      (let ((offset (terminal-scroll-offset terminal)))
+        (dotimes (row (snapshot-rows snapshot))
+          ;; With the viewport scrolled back by N, the top N rows come from the
+          ;; history and the rest are the live screen shifted down.  Scrollback
+          ;; line 0 is the MOST RECENT, so the row that is `offset' lines above
+          ;; the top of the screen is line (offset - 1 - row).
+          (let ((history (- offset row)))
+            (cond
+              ((plusp history)
+               (let ((line (vt:vt-scrollback-line vt (1- history))))
+                 (fill-row-from-history (aref cells row) line
+                                        (snapshot-cols snapshot))))
+              ((or (zerop offset) (= 1 (sbit dirty (- row offset))))
+               (vt:vt-row-cells vt (- row offset) (aref cells row)))))))
       (replace (snapshot-dirty snapshot) dirty)
       (vt:vt-clear-dirty vt)
       (multiple-value-bind (crow ccol visible) (vt:vt-cursor vt)

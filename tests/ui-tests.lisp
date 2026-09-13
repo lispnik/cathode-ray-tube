@@ -225,3 +225,154 @@ being computed and never passed, so every profile had a margin of zero."
                   3278 ~,1F" round-margin flat-margin))
         (crt.ui:end-session round)
         (crt.ui:end-session flat)))))
+
+;;; Mouse, selection and the clipboard ---------------------------------------------
+
+(defmacro with-session ((var &rest args) &body body)
+  `(let ((,var (crt.ui:make-session :title "cathode-ray-tube test" ,@args)))
+     (unwind-protect (progn ,@body)
+       (crt.ui:end-session ,var))))
+
+(defun feed-session (session string &key (timeout 5.0))
+  "Run STRING through the child and wait for it to appear."
+  (declare (ignore string))
+  (wait-for (lambda () (plusp (length (screen-of session)))) :timeout timeout))
+
+(defun screen-of (session)
+  (let ((terminal (crt.ui:session-terminal session)))
+    (crt.terminal:with-terminal-locked (terminal)
+      (crt.vt:vt-text (crt.terminal:terminal-vt terminal) 0
+                      (crt.terminal:terminal-rows terminal)))))
+
+(test selection-covers-cells-in-reading-order
+  "Not a rectangle.  A selection over three lines takes the tail of the first,
+all of the middle and the head of the last, which is what selecting prose means."
+  (let ((selection (crt.ui:make-selection 1 5 3 2)))
+    (is-false (crt.ui:cell-selected-p selection 0 9) "the row above is outside")
+    (is-false (crt.ui:cell-selected-p selection 1 4) "before the anchor on its row")
+    (is-true (crt.ui:cell-selected-p selection 1 5) "the anchor itself")
+    (is-true (crt.ui:cell-selected-p selection 1 79) "to the end of the first row")
+    (is-true (crt.ui:cell-selected-p selection 2 0) "all of a middle row")
+    (is-true (crt.ui:cell-selected-p selection 2 79))
+    (is-true (crt.ui:cell-selected-p selection 3 1) "up to the end column")
+    (is-false (crt.ui:cell-selected-p selection 3 2) "which is exclusive")
+    (is-false (crt.ui:cell-selected-p selection 4 0) "the row below is outside")))
+
+(test a-selection-dragged-upward-still-works
+  "The anchor can be after the end, and normalising on every mouse-move would
+lose which end the user is holding."
+  (let ((up (crt.ui:make-selection 3 2 1 5)))
+    (is-true (crt.ui:cell-selected-p up 2 40) "a middle row is covered either way")
+    (is-true (crt.ui:cell-selected-p up 1 5))
+    (is-false (crt.ui:cell-selected-p up 1 4))))
+
+(test selection-yields-the-text-under-it
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (with-session (session :command '("/bin/sh" "-c" "printf 'HELLO WORLD'; sleep 10"))
+      (is-true (wait-for (lambda () (search "HELLO" (screen-of session)))))
+      ;; Columns 6 through 11: "WORLD".
+      (setf (crt.ui:session-selection session) (crt.ui:make-selection 0 6 0 11))
+      (is (string= "WORLD" (crt.ui:selection-text session))
+          "got ~S" (crt.ui:selection-text session)))))
+
+(test double-click-selects-a-word
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (with-session (session :command '("/bin/sh" "-c" "printf 'alpha beta gamma'; sleep 10"))
+      (is-true (wait-for (lambda () (search "beta" (screen-of session)))))
+      ;; "alpha beta gamma": beta occupies columns 6-9.
+      (multiple-value-bind (start end) (crt.ui:word-bounds session 0 7)
+        (is (= 6 start) "word starts at 6, got ~D" start)
+        (is (= 10 end) "word ends at 10 exclusive, got ~D" end)))))
+
+(defun shader-distort (x y width height frame-size curvature)
+  "An INDEPENDENT transcription of distortCoordinates from crt.metal.
+
+Deliberately written out again from the shader rather than calling the Lisp one,
+so the test compares two readings of the same source instead of a function with
+itself."
+  (let* ((u (- (* (/ x width) (+ 1d0 (* 2d0 frame-size))) frame-size))
+         (v (- (* (/ y height) (+ 1d0 (* 2d0 frame-size))) frame-size))
+         (ccx (- u 0.5d0))
+         (ccy (- v 0.5d0))
+         (dist (* (+ (* ccx ccx) (* ccy ccy)) curvature)))
+    (values (* (+ u (* ccx (+ 1d0 dist) dist)) width)
+            (* (+ v (* ccy (+ 1d0 dist) dist)) height))))
+
+(test clicking-maps-through-the-same-curvature-the-shader-applies
+  "The screen is BENT, and a click lands where the character LOOKED.
+
+The mapping is the shader's distortCoordinates applied in the SAME direction,
+not its inverse: the static pass samples the texture at D(screen), so the
+texture coordinate under a screen position is D of that position.  I got this
+backwards first -- see the header of geometry.lisp -- and the test that caught it
+was asserting the wrong property, so it is now written against an independent
+transcription of the shader."
+  (let* ((width 1000d0) (height 600d0)
+         (curvature 0.3d0) (frame 0.02d0))
+    (dolist (point '((500d0 300d0) (100d0 100d0) (900d0 500d0) (20d0 580d0)))
+      (destructuring-bind (x y) point
+        (multiple-value-bind (gx gy) (crt.ui:distort-point x y width height
+                                                           frame curvature)
+          (multiple-value-bind (sx sy) (shader-distort x y width height
+                                                       frame curvature)
+            (is (< (abs (- gx sx)) 0.001d0)
+                "at ~,0F,~,0F the mouse mapping gives x=~,2F and the shader ~,2F"
+                x y gx sx)
+            (is (< (abs (- gy sy)) 0.001d0)
+                "at ~,0F,~,0F the mouse mapping gives y=~,2F and the shader ~,2F"
+                x y gy sy)))))
+    ;; And it is a real transform, not a no-op: the centre is a fixed point and
+    ;; a corner moves a long way.
+    (multiple-value-bind (cx cy) (crt.ui:distort-point 500d0 300d0 width height
+                                                        0d0 curvature)
+      (is (< (abs (- cx 500d0)) 0.5d0) "the centre barely moves")
+      (is (< (abs (- cy 300d0)) 0.5d0)))
+    (multiple-value-bind (ex ey) (crt.ui:distort-point 20d0 20d0 width height
+                                                        0d0 curvature)
+      (is (> (abs (- ex 20d0)) 5d0)
+          "a corner must move a long way, or the curvature is not being applied")
+      (is (> (abs (- ey 20d0)) 5d0)))))
+
+(test a-flat-profile-maps-straight-through
+  "With no curvature the mapping must be the identity, or every click on IBM
+3278 Reborn and Boring would be wrong."
+  (multiple-value-bind (x y) (crt.ui:distort-point 123d0 456d0 1000d0 600d0 0d0 0d0)
+    (is (< (abs (- x 123d0)) 0.001d0))
+    (is (< (abs (- y 456d0)) 0.001d0))))
+
+(test the-clipboard-round-trips
+  "Opt-in, because it overwrites whatever the user had on their pasteboard.
+
+    CRT_TEST_CLIPBOARD=1 make test"
+  (if (not (uiop:getenv "CRT_TEST_CLIPBOARD"))
+      (skip "set CRT_TEST_CLIPBOARD=1 to test the pasteboard")
+      (progn
+        (crt.ui:ensure-appkit)
+        (crt.ui:set-clipboard-string "cathode-ray-tube test")
+        (is (string= "cathode-ray-tube test" (crt.ui:clipboard-string))))))
+
+(test the-menu-bar-has-what-it-needs
+  "Without a menu bar AppKit does no key-equivalent handling at all, so Cmd-Q,
+Cmd-C and Cmd-V are dead keys rather than commands."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (objc.runloop:shared-application :activation-policy 0)
+    (let* ((bar (crt.ui:make-menu-bar))
+           (titles (loop for i below (objc:invoke-into 'integer bar "numberOfItems")
+                         for item = (objc:invoke bar "itemAtIndex:" i)
+                         for submenu = (objc:invoke item "submenu")
+                         unless (crt.metal:null-object-p submenu)
+                           collect (objc:invoke-into 'string submenu "title"))))
+      (dolist (wanted '("File" "Edit" "View" "Profiles" "Window"))
+        (is-true (member wanted titles :test #'string=)
+                 "the menu bar has no ~A menu; it has ~S" wanted titles))
+      ;; The Profiles menu is the only way to change look at run time.
+      (let* ((index (position "Profiles" titles :test #'string=))
+             (item (objc:invoke bar "itemAtIndex:" index))
+             (menu (objc:invoke item "submenu")))
+        (is (= 14 (objc:invoke-into 'integer menu "numberOfItems"))
+            "all fourteen profiles should be listed")))))
