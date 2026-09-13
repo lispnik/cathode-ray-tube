@@ -32,7 +32,8 @@ RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 	  --eval '$(REGISTRY)'
 
 .PHONY: all deps vendor check-vendor probe constants check-metal-constants \
-        test test-no-bundle run repl app icon check-app run-app install-app \
+        test test-no-bundle run repl app icon check-app check-dist run-app \
+        install-app \
         notarize dmg notarize-dmg release gallery clean distclean
 
 all: deps
@@ -191,8 +192,15 @@ define check-links
 	[ $$fail -eq 0 ] && echo "  ok: nothing outside /usr/lib and /System"
 endef
 
+# STRUCTURE, not distributability.  The linkage guard is reported here but does
+# not fail the target, because a bundle built against Homebrew's SBCL is
+# perfectly good for testing and is not shippable -- and CI builds with Homebrew
+# SBCL on purpose, since building one from source for every push would cost more
+# than it tells anyone.  `make notarize' is where linkage is a hard failure, and
+# the release workflow builds an SBCL that passes it.
 check-app: app
-	$(call check-links,$(APP))
+	@$(MAKE) --no-print-directory check-dist || \
+	  echo "  note: not distributable as built; make notarize is where that is enforced"
 	@echo "Info.plist:"
 	@plutil -p "$(APP)/Contents/Info.plist" | grep -E "CFBundleIdentifier|NSPrincipalClass|LSMinimumSystemVersion|CFBundleName"
 	@test -d "$(APP)/Contents/Resources/fonts" || { echo "error: fonts are missing" >&2; exit 1; }
@@ -217,6 +225,11 @@ install-app: app
 # An AD HOC signature is refused by Apple, but only after the upload; and a
 # bundle that loads something from outside itself notarises and then fails to
 # launch elsewhere.
+# The distribution guard on its own, so CI can report it without failing and
+# `notarize' can insist on it.
+check-dist: app
+	$(call check-links,$(APP))
+
 notarize: app
 	@codesign -dvv "$(APP)" 2>&1 | grep -q adhoc && { \
 	  echo "error: $(APP) is signed ad hoc, and Apple will refuse it." >&2; \

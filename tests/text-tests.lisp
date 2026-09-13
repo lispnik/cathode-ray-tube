@@ -422,3 +422,37 @@ region rather than blinking its text."
           ;; The background is still there: alpha stays opaque.
           (is (= 255 (fourth (crt.metal:texture-pixel off-pixels off 1 1)))
               "the background must survive the dark half"))))))
+
+;;; The profile-to-face mapping.
+;;;
+;;; These live here rather than with the profile suite because they reach into
+;;; CRT.TEXT, which needs CoreText and is therefore not part of the portable
+;;; system.  The ECL leg found that by failing with
+;;; "The function CATHODE-RAY-TUBE.TEXT:FONT-FOR-PROFILE-NAME is undefined",
+;;; which is exactly the kind of layering slip that leg exists to catch.
+
+(in-suite text)
+
+(test every-profile-names-a-font-we-ship
+  "All fourteen profiles must resolve to a bundled face.
+
+The mapping is upstream's fontName strings, kept unchanged so that a profile
+file can be read by either program.  A profile whose face does not resolve opens
+in the default one, silently -- so this is what says whether that is happening."
+  (dolist (profile crt.settings:+profiles+)
+    (let* ((name (crt.settings:profile-font-name profile))
+           (face (crt.text:font-for-profile-name name)))
+      (is-true face "~A names the font ~S, which maps to nothing"
+          (crt.settings:profile-name profile) name)
+      (when face
+        (is-true (probe-file (crt.text:bundled-font-path face))
+            "~A wants ~S -> ~S, and that file is not there"
+            (crt.settings:profile-name profile) name face)))))
+
+(test the-font-table-covers-upstreams
+  "Every face cool-retro-term ships is nameable here."
+  (is (= 24 (length crt.text:+profile-font-names+)))
+  (dolist (entry crt.text:+profile-font-names+)
+    (is-true (probe-file (crt.text:bundled-font-path (cdr entry)))
+        "~S -> ~S is missing its file" (car entry) (cdr entry))))
+

@@ -56,8 +56,24 @@ bindings compute them."
 ;;; The wire names are camelCase because they are cool-retro-term's, and a
 ;;; profile file has to travel between the two programs.
 
-(defparameter +profile-keys+
-  '(("ambientLight"     profile-ambient-light     :real)
+(defmacro define-profile-keys (&body entries)
+  "Build the wire table with a READER and a WRITER for each key.
+
+A CLOSURE for the writer, not `(fdefinition (list \'setf accessor))'.  That works
+on SBCL and NOT on ECL, where a DEFSTRUCT accessor's setf is an expander rather
+than a function -- the portable suite failed there with
+`The function (SETF PROFILE-BLOOM) is undefined', which is true and says nothing
+about the profile.  A lambda calling SETF is what both implementations agree on."
+  `(defparameter +profile-keys+
+     (list ,@(loop for (wire accessor type) in entries
+                   collect `(list ,wire #',accessor
+                                  (lambda (value profile)
+                                    (setf (,accessor profile) value))
+                                  ,type)))
+     "(WIRE-NAME READER WRITER TYPE), in cool-retro-term's own order."))
+
+(define-profile-keys
+  ("ambientLight"     profile-ambient-light     :real)
     ("backgroundColor"  profile-background-color  :string)
     ("bloom"            profile-bloom             :real)
     ("brightness"       profile-brightness        :real)
@@ -84,12 +100,11 @@ bindings compute them."
     ("blinkingCursor"   profile-blinking-cursor   :boolean)
     ("frameSize"        profile-frame-size        :real)
     ("frameColor"       profile-frame-color       :string)
-    ("frameShininess"   profile-frame-shininess   :real))
-  "(WIRE-NAME ACCESSOR TYPE), in cool-retro-term's own order.")
+  ("frameShininess"   profile-frame-shininess   :real))
 
 (defun profile-to-alist (profile)
-  (loop for (name accessor nil) in +profile-keys+
-        collect (cons name (funcall accessor profile))))
+  (loop for (name reader nil nil) in +profile-keys+
+        collect (cons name (funcall reader profile))))
 
 (defun profile-from-alist (alist &key (into (make-profile)) name)
   "Apply ALIST to a profile, leaving anything it does not mention alone.
@@ -98,15 +113,11 @@ bindings compute them."
 each key only when it is not undefined -- so a partial profile overrides what it
 names and nothing else, and a profile written by a future version with extra
 keys still loads."
-  (loop for (wire accessor type) in +profile-keys+
+  (loop for (wire nil writer type) in +profile-keys+
         for entry = (assoc wire alist :test #'string-equal)
         when entry
           do (let ((value (cdr entry)))
-               ;; (funcall #'(setf accessor) VALUE OBJECT) -- the new value comes
-               ;; FIRST.  The other order type-errors with the value as the
-               ;; datum, which reads like the value is wrong rather than the
-               ;; call.
-               (funcall (fdefinition (list 'setf accessor))
+               (funcall writer
                         (ecase type
                           (:real (coerce value 'double-float))
                           (:integer (round value))
@@ -117,30 +128,20 @@ keys still loads."
   into)
 
 (defun profile-to-json (profile &key (version 2))
-  "A profile as cool-retro-term writes one, so its importer accepts ours."
-  (com.inuoe.jzon:stringify
-   (let ((table (make-hash-table :test 'equal)))
-     (loop for (wire accessor type) in +profile-keys+
-           do (setf (gethash wire table)
-                    (let ((value (funcall accessor profile)))
-                      (if (eq type :real)
-                          ;; stringify() in Storage.qml rounds every number to
-                          ;; four decimals.  Matching it keeps a round trip
-                          ;; through either program byte-identical.
-                          (/ (fround (* value 10000)) 10000)
-                          value))))
-     (setf (gethash "name" table) (profile-name profile)
-           (gethash "version" table) version)
-     table)
-   :pretty t))
+  "A profile as cool-retro-term writes one, so its importer accepts ours.
+
+Storage.qml's stringify() rounds every number to four decimals; WRITE-JSON-NUMBER
+does the same, so a round trip through either program is byte-identical."
+  (write-json (append (profile-to-alist profile)
+                      (list (cons "name" (profile-name profile))
+                            (cons "version" version)))))
 
 (defun profile-from-json (string &key (into (make-profile)))
   "Read a cool-retro-term profile.  Signals when the version is not 2."
-  (let* ((table (com.inuoe.jzon:parse string))
-         (version (gethash "version" table))
-         (alist (loop for key being the hash-keys of table using (hash-value value)
-                      collect (cons key value))))
+  (let* ((alist (read-json string))
+         (version (cdr (assoc "version" alist :test #'string-equal)))
+         (name (cdr (assoc "name" alist :test #'string-equal))))
     (when (and version (/= (round version) 2))
       (error "This is a version ~A profile; cathode-ray-tube reads version 2."
              version))
-    (profile-from-alist alist :into into :name (gethash "name" table))))
+    (profile-from-alist alist :into into :name name)))

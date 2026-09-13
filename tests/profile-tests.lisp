@@ -152,25 +152,57 @@ clean; below that they alias, so they fade rather than shimmer."
          (crt.settings:normalized-window-scale 2048d0 2048d0))
       "a smaller window gets a larger scale, so the curvature looks the same"))
 
-(test every-profile-names-a-font-we-ship
-  "All fourteen profiles must resolve to a bundled face.
+;;; JSON ----------------------------------------------------------------------
 
-The mapping is upstream's fontName strings, kept unchanged so that a profile
-file can be read by either program.  A profile whose face does not resolve opens
-in the default one, silently -- so this is what says whether that is happening."
-  (dolist (profile crt.settings:+profiles+)
-    (let* ((name (crt.settings:profile-font-name profile))
-           (face (crt.text:font-for-profile-name name)))
-      (is-true face "~A names the font ~S, which maps to nothing"
-          (crt.settings:profile-name profile) name)
-      (when face
-        (is-true (probe-file (crt.text:bundled-font-path face))
-            "~A wants ~S -> ~S, and that file is not there"
-            (crt.settings:profile-name profile) name face)))))
+(test json-reads-what-it-writes
+  (let ((alist '(("a" . 1) ("b" . 2.5d0) ("c" . "hello") ("d" . t) ("e" . nil))))
+    (let ((back (crt.settings:read-json (crt.settings:write-json alist))))
+      (is (= 1 (cdr (assoc "a" back :test #'string=))))
+      (is (< (abs (- 2.5d0 (cdr (assoc "b" back :test #'string=)))) 1d-9))
+      (is (string= "hello" (cdr (assoc "c" back :test #'string=))))
+      (is (eq t (cdr (assoc "d" back :test #'string=))))
+      (is (null (cdr (assoc "e" back :test #'string=)))))))
 
-(test the-font-table-covers-upstreams
-  "Every face cool-retro-term ships is nameable here."
-  (is (= 24 (length crt.text:+profile-font-names+)))
-  (dolist (entry crt.text:+profile-font-names+)
-    (is-true (probe-file (crt.text:bundled-font-path (cdr entry)))
-        "~S -> ~S is missing its file" (car entry) (cdr entry))))
+(test json-escapes-what-it-must
+  (let* ((tricky "a\"b\\c
+d	e")
+         (back (crt.settings:read-json
+                (crt.settings:write-json (list (cons "k" tricky))))))
+    (is (string= tricky (cdr (assoc "k" back :test #'string=))))))
+
+(test json-numbers-do-not-print-as-lisp
+  "CL prints a double as 0.55d0, and `d0' is not JSON -- cool-retro-term's
+importer would reject it."
+  (let ((text (crt.settings:write-json '(("x" . 0.55d0) ("y" . 1.0d0) ("z" . 3)))))
+    (is (not (search "d0" text)) "wrote ~S" text)
+    (is (search "0.55" text))
+    (is (search "\"z\": 3" text) "an integer keeps no decimal point: ~S" text)))
+
+(test json-refuses-structure-it-cannot-represent
+  "Rather than half-reading it.  A profile is flat; if the format ever grows
+nesting this says so instead of silently dropping a key."
+  (signals crt.settings:json-error (crt.settings:read-json "{\"a\": {\"b\": 1}}"))
+  (signals crt.settings:json-error (crt.settings:read-json "{\"a\": [1, 2]}"))
+  (signals crt.settings:json-error (crt.settings:read-json "{\"a\" 1}"))
+  (signals crt.settings:json-error (crt.settings:read-json "not an object")))
+
+(test a-profile-written-here-is-readable-by-cool-retro-term
+  "Same keys, same names, same four-decimal rounding.
+
+The format is upstream's and the point of matching it exactly is that a profile
+can move between the two programs -- which is also the only practical way for
+anyone to check that this port is faithful."
+  (let* ((profile (crt.settings:find-profile "Default Amber"))
+         (text (crt.settings:profile-to-json profile))
+         (alist (crt.settings:read-json text)))
+    (is (= 2 (cdr (assoc "version" alist :test #'string=))))
+    (is (string= "Default Amber" (cdr (assoc "name" alist :test #'string=))))
+    ;; Every one of the twenty-eight keys, under upstream's camelCase names.
+    (dolist (key '("ambientLight" "backgroundColor" "bloom" "brightness" "burnIn"
+                   "chromaColor" "contrast" "flickering" "fontColor" "fontName"
+                   "fontSource" "fontWidth" "lineSpacing" "glowingLine"
+                   "horizontalSync" "jitter" "rasterization" "rgbShift"
+                   "saturationColor" "screenCurvature" "screenRadius"
+                   "staticNoise" "windowOpacity" "margin" "blinkingCursor"
+                   "frameSize" "frameColor" "frameShininess"))
+      (is-true (assoc key alist :test #'string=) "~A is missing from the JSON" key))))

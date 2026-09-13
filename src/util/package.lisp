@@ -93,7 +93,10 @@
    #:+screen-curvature-size+ #:+min-burn-in-fade-time+ #:+max-burn-in-fade-time+
    #:+base-font-scaling+ #:contrast-mix
    ;; serialisation
-   #:profile-to-alist #:profile-from-alist #:profile-to-json #:profile-from-json))
+   #:profile-to-alist #:profile-from-alist #:profile-to-json #:profile-from-json
+   ;; the small JSON reader and writer, which exists because jzon does not
+   ;; compile on ECL -- see src/settings/json.lisp
+   #:read-json #:write-json #:json-error #:json-error-message))
 
 (defpackage #:cathode-ray-tube.vt
   (:use #:cl)

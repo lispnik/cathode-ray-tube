@@ -28,7 +28,9 @@ red and the SBCL legs do not."
   :author "Matthew Kennedy <burnsidemk@gmail.com>"
   :license "GPL-3.0-or-later"
   :version "0.1.0"
-  :depends-on (#:cffi #:babel #:bordeaux-threads #:alexandria #:com.inuoe.jzon)
+  ;; No JSON library: com.inuoe.jzon does not compile on ECL, and a profile is a
+  ;; flat object of numbers and strings.  See src/settings/json.lisp.
+  :depends-on (#:cffi #:babel #:bordeaux-threads #:alexandria)
   :serial t
   :components
   ((:module "src"
@@ -43,7 +45,8 @@ red and the SBCL legs do not."
                    (:file "foreign")))
      (:module "settings"
       :serial t
-      :components ((:file "profile")
+      :components ((:file "json")
+                   (:file "profile")
                    (:file "builtin-profiles")
                    (:file "derived")))
      (:module "vt"
