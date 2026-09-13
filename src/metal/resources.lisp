@@ -15,7 +15,8 @@
 
 (in-package #:cathode-ray-tube.metal)
 
-(defstruct (texture (:constructor %make-texture (handle width height pixel-format)))
+(defstruct (texture (:constructor %make-texture (handle width height pixel-format
+                                                 storage)))
   "An MTLTexture and the three things about it we ask for constantly.
 
 The dimensions are cached rather than read back with -width/-height because the
@@ -24,16 +25,20 @@ a number we chose ourselves is a silly way to spend a frame."
   handle
   (width 0 :type fixnum)
   (height 0 :type fixnum)
-  (pixel-format 0 :type fixnum))
+  (pixel-format 0 :type fixnum)
+  ;; Kept because TEXTURE-BYTES has to know whether a blit is needed, and asking
+  ;; -storageMode per readback is a message send to learn a number we chose.
+  (storage 0 :type fixnum))
 
 (defun make-texture (&key width height (pixel-format +pixel-format-rgba8unorm+)
                           (usage (logior +usage-render-target+ +usage-shader-read+))
-                          (storage +storage-mode-shared+)
+                          (storage (texture-storage-mode))
                           label)
   "An offscreen texture.
 
-STORAGE defaults to shared, which is what makes TEXTURE-BYTES possible; a target
-nothing reads back should be private."
+STORAGE defaults to whatever this GPU needs for TEXTURE-BYTES to work -- shared
+on Apple silicon, managed on an Intel or discrete GPU, see TEXTURE-STORAGE-MODE.
+A target nothing ever reads back should be private."
   (let ((device (or (default-device) (error "No Metal device on this machine."))))
     (with-metal
       (let ((descriptor
@@ -48,7 +53,8 @@ nothing reads back should be private."
             (error "Metal refused a ~Dx~D texture in format ~D." width height
                    pixel-format))
           (when label (objc:invoke handle "setLabel:" label))
-          (%make-texture handle (max 1 width) (max 1 height) pixel-format))))))
+          (%make-texture handle (max 1 width) (max 1 height) pixel-format
+                         storage))))))
 
 (defun release-texture (texture)
   (when (and texture (texture-handle texture))
@@ -73,12 +79,35 @@ does."
         ((= pixel-format +pixel-format-rgba16float+) 8)
         (t 4)))
 
+(defun synchronize-texture (texture)
+  "Make the CPU's copy of TEXTURE agree with the GPU's.  A no-op where they are
+the same memory.
+
+On a managed texture the two are genuinely separate allocations, and nothing
+reconciles them on its own: -getBytes: after a render reads the CPU copy, which
+is still the zeros it was allocated with.  A blit encoder's -synchronizeResource:
+is the only thing that copies back, and it has to be committed and waited on
+before the read.
+
+This is not defensive.  It is the difference between a suite that is green on
+Apple silicon and a suite that is green everywhere -- twenty-six assertions on
+the Intel leg of CI read (0 0 0 0) for want of these six lines."
+  (when (= (texture-storage texture) +storage-mode-managed+)
+    (with-metal
+      (let* ((command (objc:invoke (command-queue) "commandBuffer"))
+             (blit (objc:invoke command "blitCommandEncoder")))
+        (objc:invoke blit "synchronizeResource:" (texture-handle texture))
+        (objc:invoke blit "endEncoding")
+        (objc:invoke command "commit")
+        (objc:invoke command "waitUntilCompleted")))))
+
 (defun texture-bytes (texture)
   "TEXTURE's pixels as an octet vector, row-major from the top left.
 
 Only for a shared or managed texture, and only for tests and tools -- reading a
 render target back stalls the GPU, which is exactly what a per-pixel assertion
 wants and exactly what a frame does not."
+  (synchronize-texture texture)
   (with-metal
     (let* ((width (texture-width texture))
            (height (texture-height texture))
@@ -111,8 +140,13 @@ Apple silicon there is one pool of memory and this is simply where it is."
 (defun make-buffer (length &key label)
   (let ((device (or (default-device) (error "No Metal device on this machine."))))
     (with-metal
-      (let ((handle (objc:invoke device "newBufferWithLength:options:"
-                                 (max 1 length) +storage-mode-shared+)))
+      (let ((handle (objc:invoke
+                     device "newBufferWithLength:options:" (max 1 length)
+                     ;; MTLResourceOptions, NOT MTLStorageMode: the storage mode
+                     ;; occupies bits 4-7.  Shared is 0 and shifts to 0, so the
+                     ;; unshifted value was right by accident and would stop
+                     ;; being right the moment it was anything else.
+                     (ash +storage-mode-shared+ +resource-storage-mode-shift+))))
         (when (null-object-p handle)
           (error "Metal refused a ~D-byte buffer." length))
         (when label (objc:invoke handle "setLabel:" label))

@@ -73,6 +73,36 @@ report, once, and it cost an hour."
   (handler-case (and (default-device) t)
     (error () nil)))
 
+(defvar *texture-storage-mode* nil
+  "Cached: the storage mode a texture this program reads back must be made with.")
+
+(defun apple-gpu-p ()
+  "True on an Apple GPU -- which is to say, on Apple silicon.
+
+-supportsFamily: with MTLGPUFamilyApple1 answers YES on every Apple GPU and NO
+on every Intel and AMD one, which is exactly the line this program cares about."
+  (let ((device (default-device)))
+    (and device
+         (with-metal (objc:invoke-bool device "supportsFamily:" +gpu-family-apple1+)))))
+
+(defun texture-storage-mode ()
+  "SHARED on Apple silicon, MANAGED everywhere else.
+
+This is the fix for twenty-six green-on-arm64, zero-on-Intel assertions.  On a
+discrete or Intel GPU the CPU and the GPU hold SEPARATE copies of a texture's
+memory, so a render target the GPU has just written reads back on the CPU as the
+zeros it was allocated with -- no error, no warning, just a black picture and a
+suite full of `got (0 0 0 0)'.  Managed storage plus a blit synchronize before
+reading is what makes the two copies agree; see SYNCHRONIZE-TEXTURE.
+
+hasUnifiedMemory is the obvious thing to ask and is the WRONG question: an Intel
+integrated GPU shares physical memory with the CPU and answers YES, and still
+keeps a separate cached copy that only a blit reconciles.  Ask what kind of GPU
+it is instead."
+  (or *texture-storage-mode*
+      (setf *texture-storage-mode*
+            (if (apple-gpu-p) +storage-mode-shared+ +storage-mode-managed+))))
+
 (defun device-name ()
   (let ((device (default-device)))
     (when device (with-metal (objc:invoke-into 'string device "name")))))
@@ -86,7 +116,7 @@ report, once, and it cost an hour."
 
 (defun reset-device ()
   "Forget the device and queue.  For tests, and for an image that was dumped."
-  (setf *device* nil *queue* nil))
+  (setf *device* nil *queue* nil *texture-storage-mode* nil))
 
 (defun null-object-p (x)
   "True for a null pointer or an OBJC object wrapping one.

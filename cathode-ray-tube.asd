@@ -1,7 +1,7 @@
 ;;;; cathode-ray-tube.asd -- a CRT terminal emulator for macOS, in Common Lisp.
 ;;;;
 ;;;; Three systems.  #:cathode-ray-tube is the application; its lower half --
-;;;; UTIL, SETTINGS, VT, PTY, TERMINAL -- is deliberately free of Objective-C
+;;;; UTIL, SETTINGS, VT, PTY, TERMINAL, CLI -- is deliberately free of Objective-C
 ;;;; and of SBCL-isms, so it loads and is tested on ECL where there is no window
 ;;;; and no Metal.  #:cathode-ray-tube/app builds bin/cathode-ray-tube.
 ;;;; #:cathode-ray-tube/tests is the FiveAM suite.
@@ -16,8 +16,8 @@
 (asdf:defsystem #:cathode-ray-tube/portable
   :description "The half of cathode-ray-tube that has no Objective-C in it."
   :long-description
-  "UTIL, SETTINGS, VT, PTY and TERMINAL: the arithmetic, the fourteen profiles,
-the terminal core and the pseudo-terminal.  No AppKit, no Metal, no CoreText,
+  "UTIL, SETTINGS, VT, PTY, TERMINAL and CLI: the arithmetic, the fourteen
+profiles, the terminal core, the pseudo-terminal and the command line.  No AppKit, no Metal, no CoreText,
 and no SBCL-isms -- so it loads and is tested on ECL, where none of those exist.
 
 This system is not a convenience.  It is how the layering is ENFORCED: the
@@ -48,7 +48,8 @@ red and the SBCL legs do not."
       :components ((:file "json")
                    (:file "profile")
                    (:file "builtin-profiles")
-                   (:file "derived")))
+                   (:file "derived")
+                   (:file "store")))
      (:module "vt"
       :serial t
       :components ((:file "cells")
@@ -61,7 +62,11 @@ red and the SBCL legs do not."
                    (:file "shell")))
      (:module "terminal"
       :serial t
-      :components ((:file "terminal")))))))
+      :components ((:file "terminal")))
+     ;; The command line is pure arithmetic over strings and belongs here, not
+     ;; in the application: CLI-TESTS runs on the ECL leg, and a parser tested
+     ;; only where AppKit exists is a parser tested on one implementation.
+     (:file "cli")))))
 
 (asdf:defsystem #:cathode-ray-tube
   :description "A terminal emulator that looks like a cathode-ray tube."
@@ -124,6 +129,7 @@ and terminal emulation by a vendored libvterm."
                  (:file "math-tests")
                  (:file "color-tests")
                  (:file "profile-tests")
+                 (:file "cli-tests")
                  (:file "vt-tests")
                  (:file "pty-tests")
                  (:file "terminal-tests")))))

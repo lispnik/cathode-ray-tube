@@ -51,6 +51,20 @@ pipeline that builds, a texture that allocates, and a black window."
     ;; shader is otherwise only discovered by opening a window.
     (finishes (crt.metal:default-library :reload t))))
 
+(defun draw-gradient (target &optional
+                                 (pipeline (crt.metal:pipeline
+                                            :fragment "gradient_fragment"
+                                            :constants (list 3 t) ; CRT_CHROMA
+                                            :label "test-gradient")))
+  "Fill TARGET with the test gradient: red tracks uv.x, green tracks uv.y."
+  (cffi:with-foreign-object (uniforms :float 2)
+    (setf (cffi:mem-aref uniforms :float 0) 0.0   ; time
+          (cffi:mem-aref uniforms :float 1) 2.0)  ; aspect
+    (crt.metal:with-render-pass (encoder target :clear '(0d0 0d0 0d0 1d0))
+      (crt.metal:use-pipeline encoder pipeline)
+      (crt.metal:bind-fragment-bytes encoder uniforms 8 0)
+      (crt.metal:draw-quad encoder))))
+
 (test offscreen-render-and-readback
   "Draw the gradient into a texture and check individual pixels.
 
@@ -64,22 +78,16 @@ here is the high-green end."
            (pipeline (crt.metal:pipeline :fragment "gradient_fragment"
                                      :constants (list 3 t) ; CRT_CHROMA
                                      :label "test-gradient")))
-      (cffi:with-foreign-object (uniforms :float 2)
-        (setf (cffi:mem-aref uniforms :float 0) 0.0   ; time
-              (cffi:mem-aref uniforms :float 1) 2.0)  ; aspect
-        (crt.metal:with-render-pass (encoder target :clear '(0d0 0d0 0d0 1d0))
-          (crt.metal:use-pipeline encoder pipeline)
-          (crt.metal:bind-fragment-bytes encoder uniforms 8 0)
-          (crt.metal:draw-quad encoder)))
+      (draw-gradient target pipeline)
       (let* ((pixels (crt.metal:texture-bytes target))
              (top-left (crt.metal:texture-pixel pixels target 1 1))
              (top-right (crt.metal:texture-pixel pixels target (- width 2) 1))
              (bottom-left (crt.metal:texture-pixel pixels target 1 (- height 2))))
         (is (= (* width height 4) (length pixels)))
         (is (near (first top-left) 0 8)
-            "red tracks uv.x: left edge should be ~0, got ~S" top-left)
+            "red tracks uv.x: left edge should be about 0, got ~S" top-left)
         (is (near (first top-right) 255 8)
-            "red tracks uv.x: right edge should be ~255, got ~S" top-right)
+            "red tracks uv.x: right edge should be about 255, got ~S" top-right)
         (is (> (second top-left) (second bottom-left))
             "green tracks uv.y: row 0 is uv.y=1, so it should exceed the last row~%~
              top ~S bottom ~S" top-left bottom-left)
@@ -136,3 +144,37 @@ four Cocoa ones by name.  This asserts the buffer path works."
           (c (crt.metal:pipeline :fragment "gradient_fragment" :constants (list 3 nil))))
       (is (eq a b) "the same key must return the same pipeline object")
       (is (not (eq a c)) "a different constant must build a different pipeline"))))
+
+(test managed-textures-read-back-after-a-blit
+  "The readback path an Intel or discrete GPU actually takes.
+
+MAKE-TEXTURE picks its storage mode from the GPU -- shared on Apple silicon,
+managed everywhere else -- so on the machine most likely to be running this test
+the managed path is never exercised at all.  Asking for it explicitly is what
+keeps it working: twenty-six assertions read (0 0 0 0) on the Intel leg of CI
+because a managed render target's CPU copy is separate memory that nothing
+reconciles until a blit encoder's -synchronizeResource: says so.
+
+Managed storage is supported on every Mac, Apple silicon included, so this runs
+everywhere rather than skipping on the architecture that needs it least."
+  (when (gpu-or-skip)
+    (let* ((width 64) (height 32)
+           (target (crt.metal:make-texture
+                    :width width :height height
+                    :storage crt.metal:+storage-mode-managed+
+                    :label "managed readback")))
+      (unwind-protect
+           (progn
+             (is (= crt.metal:+storage-mode-managed+
+                    (crt.metal:texture-storage target))
+                 "the texture must actually be managed, or this proves nothing")
+             (draw-gradient target)
+             (let* ((pixels (crt.metal:texture-bytes target))
+                    (left (crt.metal:texture-pixel pixels target 1 1))
+                    (right (crt.metal:texture-pixel pixels target (- width 2) 1)))
+               (is (near (first left) 0 8)
+                   "left edge should be about 0, got ~S" left)
+               (is (near (first right) 255 8)
+                   "right edge should be about 255, got ~S" right)
+               (is (= 255 (fourth left)) "alpha is opaque")))
+        (crt.metal:release-texture target)))))

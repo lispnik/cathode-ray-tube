@@ -38,6 +38,18 @@ emit() {                       # emit <lisp-name> <C-name> [header-hint]
     printf '  (%s . %s)\n' "$1" "$value"
 }
 
+emit_define() {                # emit_define <lisp-name> <C-name>
+    # Some of these are #defines rather than enumerators -- the storage-mode
+    # shift is one, because it is the shift the ENUMERATORS are defined in terms
+    # of -- so they need their own pattern.
+    value=$(grep -hoE "^#define[[:space:]]+$2[[:space:]]+(0x)?[0-9a-fA-F]+" \
+              "$SDK"/*.h 2>/dev/null | head -1 \
+            | sed -E 's/.*[[:space:]]//')
+    [ -n "$value" ] || { echo "could not find #define $2 under $SDK" >&2; exit 1; }
+    case "$value" in 0x*|0X*) value=$(printf '%d' "$value") ;; esac
+    printf '  (%s . %s)\n' "$1" "$value"
+}
+
 echo "("
 emit pixel-format-r8unorm       MTLPixelFormatR8Unorm        MTLPixelFormat.h
 emit pixel-format-rgba8unorm    MTLPixelFormatRGBA8Unorm     MTLPixelFormat.h
@@ -50,6 +62,15 @@ emit usage-render-target        MTLTextureUsageRenderTarget  MTLTexture.h
 emit storage-mode-shared        MTLStorageModeShared         MTLResource.h
 emit storage-mode-managed       MTLStorageModeManaged        MTLResource.h
 emit storage-mode-private       MTLStorageModePrivate        MTLResource.h
+# A BUFFER's options are MTLResourceOptions, in which the storage mode lives in
+# bits 4-7 rather than in bits 0-3.  Shared is 0 and so shifts to 0, which is why
+# passing the raw MTLStorageMode worked for exactly as long as it was shared.
+emit_define resource-storage-mode-shift MTLResourceStorageModeShift
+# Apple silicon supports the Apple families; an Intel Mac supports only the Mac
+# ones.  That is the distinction TEXTURE-STORAGE-MODE needs, and hasUnifiedMemory
+# is not it -- an Intel integrated GPU answers YES to that and still cannot show
+# the CPU a render target without a blit.
+emit gpu-family-apple1          MTLGPUFamilyApple1           MTLDevice.h
 emit load-action-dont-care      MTLLoadActionDontCare        MTLRenderPass.h
 emit load-action-load           MTLLoadActionLoad            MTLRenderPass.h
 emit load-action-clear          MTLLoadActionClear           MTLRenderPass.h

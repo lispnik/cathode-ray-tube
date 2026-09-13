@@ -32,7 +32,17 @@ thread owns the fd, so this queues rather than writes."))
   (:documentation "A terminal screen.  Subclassed once per backend."))
 
 (defgeneric vt-close (vt)
-  (:documentation "Release everything the backend holds."))
+  (:documentation "Release everything the backend holds.  Idempotent."))
+
+(defgeneric vt-open-p (vt)
+  (:documentation "True until VT-CLOSE has run.
+
+A closed VT is not a dead object -- callers keep hold of one routinely, because
+the child exiting and the last frame that drew it are two different events on
+two different threads, and whichever loses the race reads a terminal that has
+just been torn down.  So every operation on a closed VT answers as an empty
+screen rather than signalling, and this is how a caller that cares can ask.")
+  (:method ((vt vt)) t))
 
 (defgeneric vt-write (vt octets &key start end)
   (:documentation "Feed bytes from the pty.  Callers hold the terminal lock."))

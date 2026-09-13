@@ -40,6 +40,8 @@
   :description "The fourteen profiles and their derivations.")
 (def-suite vt :in portable :description "The terminal core.")
 (def-suite pty :in portable :description "Real child processes on real ptys.")
+(def-suite cli :in portable
+  :description "The command line and the settings store.")
 (def-suite terminal :in portable :description "A pty and a screen, end to end.")
 
 (defun explain-results (results label)

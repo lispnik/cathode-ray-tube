@@ -28,11 +28,13 @@
    ;; device
    #:with-metal #:ensure-frameworks #:ensure-metal #:metal-available-p #:default-device #:device-name
    #:command-queue #:command-buffer #:reset-device #:null-object-p
+   #:apple-gpu-p #:texture-storage-mode
    #:*device* #:*queue*
    ;; resources
    #:texture #:texture-p #:texture-handle #:texture-width #:texture-height
    #:texture-pixel-format #:make-texture #:release-texture
-   #:texture-bytes #:texture-pixel #:bytes-per-pixel
+   #:texture-storage #:texture-bytes #:texture-pixel #:bytes-per-pixel
+   #:synchronize-texture
    #:make-sampler #:with-mtl-region
    #:buffer #:buffer-p #:buffer-handle #:buffer-contents #:buffer-length
    #:make-buffer #:release-buffer #:bind-vertex-buffer
@@ -55,6 +57,7 @@
    #:+texture-type-2d+
    #:+usage-shader-read+ #:+usage-shader-write+ #:+usage-render-target+
    #:+storage-mode-shared+ #:+storage-mode-managed+ #:+storage-mode-private+
+   #:+resource-storage-mode-shift+ #:+gpu-family-apple1+
    #:+load-action-dont-care+ #:+load-action-load+ #:+load-action-clear+
    #:+store-action-dont-care+ #:+store-action-store+
    #:+primitive-triangle+ #:+primitive-triangle-strip+
@@ -96,7 +99,17 @@
    #:profile-to-alist #:profile-from-alist #:profile-to-json #:profile-from-json
    ;; the small JSON reader and writer, which exists because jzon does not
    ;; compile on ECL -- see src/settings/json.lisp
-   #:read-json #:write-json #:json-error #:json-error-message))
+   #:read-json #:write-json #:json-error #:json-error-message
+   ;; the settings store
+   #:settings #:settings-p #:make-settings #:*settings*
+   #:settings-profile-name #:settings-effects #:settings-effects-frame-skip
+   #:settings-window-scaling #:settings-bloom-quality #:settings-burn-in-quality
+   #:settings-font-scaling #:settings-columns #:settings-rows
+   #:settings-show-terminal-size #:settings-use-custom-command
+   #:settings-custom-command #:settings-custom-profiles
+   #:save-settings #:load-settings #:load-settings-into-place #:settings-file
+   #:all-profiles #:find-any-profile #:builtin-profile-p
+   #:save-custom-profile #:remove-custom-profile))
 
 (defpackage #:cathode-ray-tube.vt
   (:use #:cl)
@@ -105,7 +118,7 @@
   (:export
    ;; the backend protocol -- everything above this package talks to these and
    ;; never to CFFI, so a different terminal core is a file rather than a rewrite
-   #:vt #:make-vt #:vt-close
+   #:vt #:make-vt #:vt-close #:vt-open-p
    #:vt-write #:vt-resize #:vt-reset
    #:vt-rows #:vt-cols #:vt-cell #:vt-row-cells #:vt-cursor
    #:vt-dirty-rows #:vt-dirty-p #:vt-clear-dirty #:vt-damage-all
@@ -243,4 +256,5 @@
   (:local-nicknames (#:util #:cathode-ray-tube.util)
                     (#:metal #:cathode-ray-tube.metal)
                     (#:ui #:cathode-ray-tube.ui))
-  (:export #:main))
+  (:export #:main #:parse-command-line #:tokenize-command-line #:version
+           #:+usage+ #:apply-options))

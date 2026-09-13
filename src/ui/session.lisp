@@ -211,7 +211,7 @@ profile written by a newer cool-retro-term may name a face we do not have."
       *default-font*))
 
 (defun make-session (&key width height (columns *default-columns*)
-                          (rows *default-rows*) command
+                          (rows *default-rows*) command directory
                           font (title "cathode-ray-tube")
                           (profile *default-profile*) (effects t))
   "A window running a shell.  Main thread only.
@@ -243,13 +243,13 @@ whatever size the window is dragged to."
           (setf width (ceiling pixel-width backing)
                 height (ceiling pixel-height backing)))))
     (make-session-in-window loaded scale margin width height title command
-                            chosen effects)))
+                            directory chosen effects)))
 
 (defconstant +min-font-scaling+ 0.25d0)
 (defconstant +max-font-scaling+ 2.5d0)
 
 (defun make-session-in-window (loaded scale margin width height title command
-                               profile effects)
+                               directory profile effects)
   (let* ((window (make-crt-window :width width :height height :title title
                                   :draw-function #'draw-session))
          (view (crt-window-view window)))
@@ -272,7 +272,7 @@ whatever size the window is dragged to."
                                      :line-spacing +default-line-spacing+)
           (setf (session-terminal session)
                 (crt.terminal:make-terminal
-                 :rows rows :cols cols :command command
+                 :rows rows :cols cols :command command :directory directory
                  ;; The reader thread is not the main thread, and closing a
                  ;; window from anywhere else is a crash waiting for a quiet
                  ;; afternoon.
@@ -452,7 +452,7 @@ change on both kinds of face."
     profile))
 
 (defun run-terminal (&key width height (columns *default-columns*)
-                          (rows *default-rows*) command
+                          (rows *default-rows*) command directory fullscreen
                           (profile *default-profile*) (effects t))
   "Open a terminal window and run the application.  Blocks."
   (ensure-appkit)
@@ -461,6 +461,11 @@ change on both kinds of face."
     (setf *delegate* (make-instance 'application-delegate))
     (objc:invoke app "setDelegate:" (objc:objc-object-pointer *delegate*))
     (make-menu-bar)
-    (make-session :width width :height height :columns columns :rows rows
-                  :command command :profile profile :effects effects)
+    (let ((session (make-session :width width :height height
+                                 :columns columns :rows rows
+                                 :command command :directory directory
+                                 :profile profile :effects effects)))
+      (when fullscreen
+        (objc:invoke (crt-window-handle (session-window session))
+                     "toggleFullScreen:" (cffi:null-pointer))))
     (objc.runloop:run-cocoa-application)))

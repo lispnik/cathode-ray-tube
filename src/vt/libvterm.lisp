@@ -338,6 +338,50 @@ width 0 tells it.")
 
 ;;; The protocol ---------------------------------------------------------------
 
+(defmethod vt-open-p ((vt libvterm-vt))
+  (and (vt-handle vt) t))
+
+(defmacro define-closed-answers (&body clauses)
+  "For each (GENERIC LAMBDA-LIST ANSWER), an :AROUND method answering ANSWER
+when the VT is closed.
+
+VT-CLOSE nulls the handle and the object outlives it, so every method below that
+reaches into C would hand NIL to a CFFI :POINTER -- which SBCL reports as `NIL is
+not of type SB-SYS:SYSTEM-AREA-POINTER', from inside the foreign call, naming
+nothing that would lead you back here.
+
+That is not a hypothetical.  A child exiting closes the terminal from the exit
+handler while a reader is still pulling cells out of it, and which of the two
+wins is the scheduler's business: the same code is green on one machine and dies
+on another.  It reached CI as one red assertion on one of three runners.
+
+An answer per generic rather than a blanket NIL, because the callers want an
+empty screen and not a type error one frame later: VT-TEXT of a dead terminal is
+the empty string, its cells are blank cells, and writing to it is a no-op."
+  `(progn
+     ,@(loop for (generic lambda-list answer) in clauses
+             for variables = (remove-if (lambda (x)
+                                          (member x lambda-list-keywords))
+                                        (mapcar (lambda (x)
+                                                  (if (consp x) (first x) x))
+                                                lambda-list))
+             collect `(defmethod ,generic :around ,lambda-list
+                        (declare (ignorable ,@variables))
+                        (if (vt-open-p vt) (call-next-method) ,answer)))))
+
+(define-closed-answers
+  (vt-write        ((vt libvterm-vt) octets &key start end)             nil)
+  (vt-resize       ((vt libvterm-vt) rows cols)                         vt)
+  (vt-reset        ((vt libvterm-vt) &key hard)                         vt)
+  (vt-row-cells    ((vt libvterm-vt) row cells)                         cells)
+  (vt-cell         ((vt libvterm-vt) row col)                           (make-cell))
+  (vt-text         ((vt libvterm-vt) start-row end-row
+                    &key start-col end-col)                             "")
+  (vt-mouse-move   ((vt libvterm-vt) row col modifiers)                 nil)
+  (vt-mouse-button ((vt libvterm-vt) button pressed modifiers)          nil)
+  (vt-start-paste  ((vt libvterm-vt))                                   nil)
+  (vt-end-paste    ((vt libvterm-vt))                                   nil))
+
 (defmethod vt-write ((vt libvterm-vt) octets &key (start 0) end)
   (let* ((end (or end (length octets)))
          (count (- end start)))

@@ -172,3 +172,36 @@ reason at all."
       (crt.vt:vt-row-cells term 0 cells)
       (is (eq first-cell (aref cells 0)) "the same CELL object must come back")
       (is (char= #\a (crt.vt:cell-char (aref cells 0))) "filled in place"))))
+
+(test a-closed-vt-answers-as-an-empty-screen
+  "Everything keeps working after VT-CLOSE, answering as a blank terminal.
+
+The object outlives the C handle, and callers hold onto it: a child exiting
+closes the terminal from one thread while another is still reading cells out of
+it for a frame that began before the exit.  Whichever loses that race used to
+reach libvterm with a null handle, which CFFI reports as `NIL is not of type
+SB-SYS:SYSTEM-AREA-POINTER' from inside the foreign call -- a message that names
+neither this file nor the race.  It was green on two CI runners and red on the
+third.
+
+VT-CLOSE twice is part of the same contract: teardown paths overlap."
+  (let ((term (crt.vt:make-vt 24 80)))
+    (feed term "hello")
+    (is-true (crt.vt:vt-open-p term) "open before closing")
+    (crt.vt:vt-close term)
+    (is-false (crt.vt:vt-open-p term) "closed after closing")
+    (is (string= "" (crt.vt:vt-text term 0 3)) "text of a dead terminal is empty")
+    (is-true (crt.vt:cell-p (crt.vt:vt-cell term 0 0)) "a cell is still a cell")
+    (is (char= #\Space (crt.vt:cell-char (crt.vt:vt-cell term 0 0)))
+        "and it is blank")
+    (let ((cells (make-array 80)))
+      (dotimes (i 80) (setf (aref cells i) (crt.vt:make-cell)))
+      (is (eq cells (crt.vt:vt-row-cells term 0 cells))
+          "VT-ROW-CELLS still hands back the array it was given"))
+    (finishes (crt.vt:vt-write term (babel:string-to-octets "ignored")))
+    (finishes (crt.vt:vt-resize term 10 40))
+    (finishes (crt.vt:vt-mouse-move term 1 1 0))
+    (finishes (crt.vt:vt-mouse-button term 1 t 0))
+    (finishes (crt.vt:vt-start-paste term))
+    (finishes (crt.vt:vt-end-paste term))
+    (finishes (crt.vt:vt-close term))))
