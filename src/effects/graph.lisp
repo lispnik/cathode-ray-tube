@@ -416,4 +416,4 @@ since the last frame, and the only thing that advances the burn-in accumulator."
              (static (render-static-pass graph source bloom)))
         (render-dynamic-pass graph target static burn-in time
                              :drawable drawable
-                             :opacity (settings:profile-window-opacity profile))))))
+                             :opacity (settings:window-alpha profile))))))

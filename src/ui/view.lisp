@@ -161,6 +161,27 @@
 
 ;;; The layer ------------------------------------------------------------------
 
+(defun set-view-opaque (view opaque)
+  "Make VIEW's layer, and the window it is in, opaque or not.
+
+BOTH, and that is the part worth stating.  Clearing the LAYER's opacity alone
+changes nothing you can see: AppKit still fills the window with its background
+colour first, so the transparency reveals that rather than the desktop.  The
+window needs -setOpaque: NO and a clear background colour as well, which is what
+upstream's fully transparent window colour on the ApplicationWindow does.
+
+The shader emits premultiplied alpha for exactly this -- see the end of
+dynamic_fragment -- so the two halves only make sense together."
+  (let ((layer (view-layer view)))
+    (when layer
+      (objc:invoke layer "setOpaque:" (and opaque t))))
+  (let ((window (objc:invoke (objc:objc-object-pointer view) "window")))
+    (unless (crt.metal:null-object-p window)
+      (objc:invoke window "setOpaque:" (and opaque t))
+      (objc:invoke window "setBackgroundColor:"
+                  (objc:invoke "NSColor" (if opaque "blackColor" "clearColor")))))
+  opaque)
+
 (defun attach-metal-layer (view)
   "Give VIEW a CAMetalLayer it owns."
   (let ((pointer (objc:objc-object-pointer view))
@@ -173,6 +194,10 @@
     (objc:invoke layer "setPixelFormat:" crt.metal:+pixel-format-bgra8unorm+)
     ;; We never sample the drawable, only write it.
     (objc:invoke layer "setFramebufferOnly:" t)
+    ;; Opaque by default, and turned off only by a profile that asks for a
+    ;; translucent window -- SET-VIEW-OPAQUE below.  A non-opaque layer costs the
+    ;; window server a composite per frame against whatever is behind it, and
+    ;; only two of the fourteen built-in profiles want it.
     (objc:invoke layer "setOpaque:" t)
     ;; Vsync.  The effects clock quantises on top of this; turning it off would
     ;; burn a core to draw frames nobody sees.

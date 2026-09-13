@@ -115,3 +115,21 @@ decay the phosphor at the display's refresh rate instead of the terminal's")
         ;; at two seconds, so anything near three means something is wedged.
         (is (< elapsed 3.0) "closing took ~,2Fs" elapsed)))
     (finishes (crt.terminal:terminal-close terminal))))
+
+(test the-bell-is-counted-and-survives-the-close
+  "BEL increments a count the UI polls, rather than calling back into AppKit.
+
+The callback runs on the READER thread and the thing that reacts to a bell is
+NSSound, which is AppKit -- so the bell crosses that boundary as a number read
+by the next frame and never as a call.  Counting also makes coalescing free: a
+`cat' over a binary emits hundreds of BELs and a terminal is expected to make
+one noise, not hundreds."
+  (with-terminal (term :rows 24 :cols 80 :command '("/bin/sh" "-c" "printf 'a\\007b\\007c'; sleep 5"))
+    (is (wait-until (lambda () (>= (crt.terminal:terminal-bell-count term) 2)))
+        "two BELs should have been counted, got ~S"
+        (crt.terminal:terminal-bell-count term))
+    ;; The text is on screen and the BELs are NOT in it: a bell that printed a
+    ;; character would be a bell that corrupted the line it rang on.
+    (let ((text (crt.terminal:with-terminal-locked (term)
+                  (crt.vt:vt-text (crt.terminal:terminal-vt term) 0 1))))
+      (is (search "abc" text) "the BELs must not appear in the text, got ~S" text))))

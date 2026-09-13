@@ -100,6 +100,15 @@ sb_pushline and forgets it -- so scrollback is entirely ours, and so is this.")
   (vt:vt-alternate-screen-p (terminal-vt terminal)))
 (defun terminal-scrollback-length (terminal)
   (vt:vt-scrollback-length (terminal-vt terminal)))
+(defun terminal-bell-count (terminal)
+  "How many BELs the child has sent since the terminal was made.
+
+A COUNT rather than a callback, so that whoever cares can notice at its own
+pace: the bell arrives on the reader thread and the thing that reacts to it is
+AppKit, and a count is the cheapest possible way not to cross that boundary from
+the wrong side.  It also makes coalescing natural -- see RING-PENDING-BELLS."
+  (vt:vt-bell-count (terminal-vt terminal)))
+
 (defun terminal-alive-p (terminal)
   (and (terminal-running terminal) (null (terminal-exit-status terminal))))
 
@@ -208,7 +217,11 @@ COMMAND defaults to the user's login shell."
 
 (defun finish-terminal (terminal)
   (setf (terminal-running terminal) nil)
-  (let ((status (or (pty:pty-reap (terminal-pty terminal)) 0)))
+  ;; PTY-WAIT, not PTY-REAP.  The loop above stops on HUP, which means the child
+  ;; has closed the pty and not that waitpid can collect it yet -- and a
+  ;; non-blocking reap in that window answers "not yet", which the OR then turned
+  ;; into "exited cleanly".  See the note on PTY-WAIT.
+  (let ((status (or (pty:pty-wait (terminal-pty terminal)) 0)))
     (setf (terminal-exit-status terminal) status)
     (let ((hook (terminal-on-exit terminal)))
       (when hook

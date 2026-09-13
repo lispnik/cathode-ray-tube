@@ -102,6 +102,29 @@ one would bulge."
 
 ;;; Time ----------------------------------------------------------------------------
 
+(defun window-alpha (profile)
+  "The alpha the finished frame is composited with, from PROFILE's windowOpacity.
+
+NOT the setting itself.  TerminalContainer.qml:34 is
+
+    opacity: appSettings.windowOpacity * 0.3 + 0.7
+
+so the slider's full range is 0.7 to 1.0 and the window never goes more than
+thirty percent transparent -- a terminal you cannot read is not a feature, and a
+port that passes the raw value through gets a window that disappears at the
+bottom of the slider."
+  (+ 0.7d0 (* 0.3d0 (float (profile-window-opacity profile) 1d0))))
+
+(defun window-transparent-p (profile)
+  "True when PROFILE asks for anything less than a solid window.
+
+The layer is opaque unless this says otherwise, and that is a real difference
+rather than bookkeeping: a non-opaque CAMetalLayer makes the window server
+composite every frame against whatever is behind it, which twelve of the
+fourteen built-in profiles have no use for.  The two that do are Neon Cyan and
+Ghost Terminal."
+  (< (window-alpha profile) 1.0d0))
+
 (defun burn-in-fade-time (profile)
   "The RATE, in reciprocal seconds, that the shaders call `burnInTime'.
 

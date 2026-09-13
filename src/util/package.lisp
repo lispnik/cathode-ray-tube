@@ -84,6 +84,7 @@
    #:profile-jitter #:profile-rasterization #:profile-rgb-shift
    #:profile-saturation-color #:profile-screen-curvature #:profile-screen-radius
    #:profile-static-noise #:profile-window-opacity #:profile-margin
+   #:window-alpha #:window-transparent-p
    #:profile-blinking-cursor #:profile-frame-size #:profile-frame-color
    #:profile-frame-shininess
    ;; derived
@@ -146,7 +147,7 @@
   (:local-nicknames (#:util #:cathode-ray-tube.util))
   (:export
    #:pty #:pty-p #:pty-fd #:pty-pid #:pty-alive-p
-   #:spawn-pty #:pty-close #:pty-read #:pty-write #:pty-reap
+   #:spawn-pty #:pty-close #:pty-read #:pty-write #:pty-reap #:pty-wait
    #:set-winsize #:get-winsize
    #:default-shell #:login-shell-arguments #:shell-command #:child-environment))
 
@@ -160,7 +161,7 @@
    #:terminal #:make-terminal #:terminal-close
    #:terminal-vt #:terminal-pty #:terminal-lock
    #:terminal-rows #:terminal-cols #:terminal-resize
-   #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
+   #:terminal-bell-count #:terminal-alive-p #:terminal-exit-status #:terminal-on-exit #:terminal-on-title
    #:terminal-send #:terminal-send-string #:terminal-paste
    #:terminal-mouse-reporting-p #:terminal-alternate-screen-p
    #:terminal-report-mouse #:terminal-scroll #:terminal-scroll-to-bottom
@@ -222,10 +223,11 @@
   (:nicknames #:crt.ui)
   (:local-nicknames (#:util #:cathode-ray-tube.util))
   (:export
-   #:ensure-appkit #:handling-errors #:run
+   #:ensure-appkit #:register-application-defaults #:handling-errors #:run
    #:crt-view #:view-layer #:view-link #:view-frame-skip #:view-effect-time
    #:view-frames #:view-drawable-size #:view-draw-function
-   #:attach-metal-layer #:start-display-link #:stop-display-link #:step-frame
+   #:attach-metal-layer #:set-view-opaque
+   #:start-display-link #:stop-display-link #:step-frame
    #:crt-window #:crt-window-p #:crt-window-handle #:crt-window-view
    #:make-crt-window #:show-crt-window #:close-crt-window #:*windows*
    #:make-menu-bar #:menu-item #:menu-separator #:submenu #:gradient-frame

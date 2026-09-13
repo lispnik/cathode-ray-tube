@@ -206,3 +206,45 @@ anyone to check that this port is faithful."
                    "staticNoise" "windowOpacity" "margin" "blinkingCursor"
                    "frameSize" "frameColor" "frameShininess"))
       (is-true (assoc key alist :test #'string=) "~A is missing from the JSON" key))))
+
+(test window-opacity-maps-onto-a-narrow-range
+  "windowOpacity 0..1 becomes an alpha of 0.7..1.0, not 0..1.
+
+TerminalContainer.qml:34 is `opacity: appSettings.windowOpacity * 0.3 + 0.7',
+so the slider's bottom end is thirty percent transparent and no more -- a
+terminal you cannot read is not a feature.  A port that passes the raw setting
+through gets a window that vanishes at the bottom of the slider, which looks
+like a blending bug and is an arithmetic one."
+  (flet ((variant (opacity)
+           (crt.settings:profile-from-alist
+            (list (cons "windowOpacity" opacity))
+            :into (copy-structure (crt.settings:find-profile "Default Amber")))))
+    (is (~~ 1.0d0 (crt.settings:window-alpha (variant 1.0d0)))
+        "fully opaque stays fully opaque")
+    (is (~~ 0.7d0 (crt.settings:window-alpha (variant 0.0d0)))
+        "and the bottom of the range is 0.7, not 0")
+    (is (~~ 0.85d0 (crt.settings:window-alpha (variant 0.5d0)))
+        "linear in between")
+    (is-false (crt.settings:window-transparent-p (variant 1.0d0))
+              "a solid profile must not make the window server composite")
+    (is-true (crt.settings:window-transparent-p (variant 0.5d0))
+             "and one that is not, must")))
+
+(test exactly-two-builtin-profiles-are-translucent
+  "Neon Cyan at 0.8 and Ghost Terminal at 0.7; the other twelve are solid.
+
+Named rather than counted, because the interesting direction is a profile
+QUIETLY becoming translucent -- which costs a composite per frame -- and the
+other direction is windowOpacity going back to doing nothing, which is what it
+did until the layer stopped being unconditionally opaque.  Ghost Terminal is
+called that for a reason: at 0.7 it is the profile the setting exists for."
+  (let ((translucent (remove-if-not #'crt.settings:window-transparent-p
+                                    (crt.settings:profile-names)
+                                    :key #'crt.settings:find-profile)))
+    (is (equal '("Ghost Terminal" "Neon Cyan") (sort (copy-list translucent) #'string<))
+        "expected exactly Neon Cyan and Ghost Terminal, got ~S" translucent)
+    (is (~~ 0.94d0 (crt.settings:window-alpha (crt.settings:find-profile "Neon Cyan")))
+        "0.8 * 0.3 + 0.7")
+    (is (~~ 0.91d0 (crt.settings:window-alpha
+                    (crt.settings:find-profile "Ghost Terminal")))
+        "0.7 * 0.3 + 0.7")))

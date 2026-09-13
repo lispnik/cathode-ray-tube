@@ -52,7 +52,28 @@ modules.  There is exactly one initialisation point in this program because
 objc's is process-global and once-only: see the note on +FRAMEWORKS+ for what
 splitting it across two partial lists actually does."
   (crt.metal:ensure-frameworks)
+  (register-application-defaults)
   t)
+
+(defun register-application-defaults ()
+  "Turn off press-and-hold, so holding a letter key REPEATS it.
+
+macOS's press-and-hold shows the accent palette instead of repeating, which in a
+terminal means that holding `j' in vi moves the cursor once and then puts up a
+menu of j-with-diacritics.  Upstream does this at main.cpp:58 with
+CFPreferencesSetAppValue.
+
+-registerDefaults: rather than CFPreferencesSetAppValue, and the difference
+matters: CFPreferencesSetAppValue WRITES the app's preferences, so a user who
+had deliberately turned press-and-hold ON for this application would find it
+turned back off, permanently, by launching it.  The registration domain is the
+lowest-priority one, so this is a default rather than a decision -- anyone who
+sets it explicitly still wins.  Same effect, one fewer thing taken away."
+  (let* ((defaults (objc:invoke "NSUserDefaults" "standardUserDefaults"))
+         (no (objc:invoke "NSNumber" "numberWithBool:" nil))
+         (dictionary (objc:invoke "NSDictionary" "dictionaryWithObject:forKey:"
+                                  no "ApplePressAndHoldEnabled")))
+    (objc:invoke defaults "registerDefaults:" dictionary)))
 
 (defmacro handling-errors ((what) &body body)
   "Run BODY, logging anything that escapes rather than letting it out.

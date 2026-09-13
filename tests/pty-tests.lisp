@@ -102,3 +102,78 @@ does not exist on ECL, where half this program still has to load."
     (unwind-protect
          (is (search "tmp" (drain pty)))
       (crt.pty:pty-close pty))))
+
+(test the-locale-is-forced-to-utf8
+  "LC_CTYPE=UTF-8, as upstream's main.cpp:55 does under Q_OS_MAC.
+
+A GUI application on macOS inherits launchd's environment, not a login shell's,
+so LANG and LC_* are routinely absent altogether -- and a child that believes it
+is in the C locale will not emit a multi-byte character.  The symptom is a
+terminal that cannot type an accent, which looks like a font or an input
+problem and is neither.
+
+Forced rather than defaulted, and overriding an inherited value, because that is
+what upstream's overwrite flag does."
+  (let ((environment (crt.pty:child-environment)))
+    (is (member "LC_CTYPE=UTF-8" environment :test #'string=)
+        "LC_CTYPE must be forced")
+    (is (= 1 (count-if (lambda (entry)
+                         (let ((equals (position #\= entry)))
+                           (and equals (string= "LC_CTYPE" (subseq entry 0 equals))))) 
+                       environment))
+        "and must appear exactly once, not shadowing an inherited copy"))
+  (is (null (member "LC_CTYPE=UTF-8"
+                    (crt.pty:child-environment :lc-ctype nil) :test #'string=))
+      "and can be turned off for a caller that knows better"))
+
+(test the-child-really-sees-utf8
+  "Through the pty, not just in the list: the environment we build has to be the
+environment that arrives."
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "printf %s \"$LC_CTYPE\"") 24 80)))
+    (unwind-protect
+         (let ((text (drain pty)))
+           (is (search "UTF-8" text) "the child's LC_CTYPE was ~S"
+               (string-trim '(#\Space #\Newline #\Return) text)))
+      (crt.pty:pty-close pty))))
+
+(test a-childs-exit-status-is-never-invented
+  "PTY-WAIT answers the real status even when asked the instant the child goes.
+
+The race this exists for: the reader loop stops on poll() reporting HUP, HUP
+means the child closed the pty rather than that the kernel has finished making a
+zombie, and a WNOHANG waitpid in that window says `not yet'.  Reporting that as
+0 says the child SUCCEEDED -- so a shell that died with status 3 was reported as
+having exited cleanly, intermittently, on whichever machine happened to be slow
+enough.
+
+Asked immediately and repeatedly rather than once, because the window is
+microseconds wide and a single try lands in it roughly never on an idle
+machine.  Twenty runs of a child that exits 3: every one of them must say 3, and
+the old code's answer -- 0 -- is a status a child really can exit with, which is
+why nothing about it looked wrong."
+  (dotimes (i 20)
+    (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "exit 3") 24 80)))
+      (unwind-protect
+           (let ((status (crt.pty:pty-wait pty)))
+             (is (eql 3 status) "run ~D reported ~S instead of 3" i status)
+             ;; Asking twice must answer twice.  Reaping clears the pid, and a
+             ;; guard that led with the pid made every later call answer NIL.
+             (is (eql 3 (crt.pty:pty-wait pty)) "and must keep saying so"))
+        (crt.pty:pty-close pty)))))
+
+(test a-signalled-child-reports-128-plus-the-signal
+  "The shell's convention, and the one anyone reading the number expects.
+
+SIGKILL rather than SIGTERM, because the child here is a session leader with a
+controlling terminal -- that is what forkpty is for -- and a shell in that
+position CATCHES SIGTERM and exits 0.  Measured: the same `kill -TERM $$' that
+reports 143 from an ordinary shell reports 0 through a pty.  Testing that would
+be testing what bash does with a signal, which is not this program's business
+and not a thing it can fix.  SIGKILL cannot be caught, so what is left is the
+decoding, which is what this is about."
+  (let ((pty (crt.pty:spawn-pty '("/bin/sh" "-c" "kill -KILL $$") 24 80)))
+    (unwind-protect
+         (let ((status (crt.pty:pty-wait pty)))
+           (is (eql (+ 128 9) status)
+               "SIGKILL should report 137, got ~S" status))
+      (crt.pty:pty-close pty))))

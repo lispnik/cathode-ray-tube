@@ -89,14 +89,25 @@ global in libSystem and reading it is portable across both."
                 until (cffi:null-pointer-p entry)
                 collect (cffi:foreign-string-to-lisp entry)))))))
 
-(defun child-environment (&key (term "xterm-256color") (colorterm "truecolor") extra)
+(defun child-environment (&key (term "xterm-256color") (colorterm "truecolor")
+                              (lc-ctype "UTF-8") extra)
   "The environment the child should see.
 
 TERM is forced, because it is a promise about what WE implement rather than
 something to inherit from whatever launched us -- and the terminal the child
-talks to is libvterm, which is an xterm."
+talks to is libvterm, which is an xterm.
+
+LC_CTYPE is forced for the same kind of reason and is upstream's, verbatim:
+main.cpp:55 is `setenv(\"LC_CTYPE\", \"UTF-8\", 1)' under Q_OS_MAC, with the
+overwrite flag set, and its comment says it is what allows UTF-8 characters to
+be used at all.  A GUI application on macOS inherits launchd's environment rather
+than a login shell's, so LANG and LC_* are routinely absent entirely -- and a
+child that believes it is in the C locale will not emit a multi-byte character,
+which shows up as a terminal that cannot type an accent rather than as anything
+to do with locales."
   (let* ((forced (append (when term (list (cons "TERM" term)))
                          (when colorterm (list (cons "COLORTERM" colorterm)))
+                         (when lc-ctype (list (cons "LC_CTYPE" lc-ctype)))
                          extra))
          (names (mapcar #'car forced)))
     (append (mapcar (lambda (pair) (format nil "~A=~A" (car pair) (cdr pair))) forced)
@@ -199,9 +210,14 @@ waiting for a slow program."
 
 128 + signal when it was killed, which is the shell's convention and the one
 anybody reading the number will expect."
-  (when (and pty (> (pty-pid pty) 0))
+  ;; The cached status FIRST, and the live pid second.  Reaping sets the pid to
+  ;; -1, so a guard that starts by requiring a live pid answers NIL for every
+  ;; call after the one that succeeded -- which makes asking twice mean
+  ;; something different from asking once, for no reason a caller could guess.
+  (when pty
     (or (pty-exit-status pty)
-        (cffi:with-foreign-object (status :int)
+        (and (> (pty-pid pty) 0)
+             (cffi:with-foreign-object (status :int)
           (let ((result (%waitpid (pty-pid pty) status +wnohang+)))
             (when (> result 0)
               (let* ((raw (cffi:mem-ref status :int))
@@ -209,7 +225,50 @@ anybody reading the number will expect."
                                (logand (ash raw -8) #xff)
                                (+ 128 (logand raw #x7f)))))
                 (setf (pty-pid pty) -1
-                      (pty-exit-status pty) code))))))))
+                      (pty-exit-status pty) code)))))))))
+
+(defun pty-wait (pty &key (timeout 2.0))
+  "Reap the child, waiting for it.  The status, or NIL if there is no child.
+
+PTY-REAP asks whether the child has already become a zombie and answers NIL when
+it has not.  That is the right answer to that question and the WRONG one to ask
+at the end of the reader loop: the loop stops the instant poll() reports HUP on
+the master, and HUP means the child has closed its side of the pty, not that the
+kernel has finished turning it into something waitpid can collect.  In that
+window WNOHANG returns 0 and the status is simply not available yet.
+
+Reporting that as 0 -- which is what `(or (pty-reap pty) 0)' did -- says the
+child EXITED CLEANLY.  So a shell that died with status 3 was reported as having
+succeeded, on a machine slow enough to open the window.  It took a CI runner to
+show it, which is exactly the kind of bug that never reproduces on the desk it
+was written at.
+
+Spin on WNOHANG first and block only if that runs out, so the ordinary case --
+already a zombie, or a microsecond away from it -- never blocks at all, and the
+pathological one cannot wedge the reader thread forever either."
+  (when pty
+    (or (pty-exit-status pty)
+        (pty-reap pty)
+        (let ((deadline (+ (get-internal-real-time)
+                           (* timeout internal-time-units-per-second))))
+          (loop (let ((status (pty-reap pty)))
+                  (when status (return status))
+                  (when (> (get-internal-real-time) deadline)
+                    (return (blocking-reap pty)))
+                  (sleep 0.002)))))))
+
+(defun blocking-reap (pty)
+  "waitpid with no WNOHANG.  The last resort of PTY-WAIT."
+  (let ((pid (pty-pid pty)))
+    (when (> pid 0)
+      (cffi:with-foreign-object (status :int)
+        (when (> (%waitpid pid status 0) 0)
+          (let* ((raw (cffi:mem-ref status :int))
+                 (code (if (zerop (logand raw #x7f))
+                           (logand (ash raw -8) #xff)
+                           (+ 128 (logand raw #x7f)))))
+            (setf (pty-pid pty) -1
+                  (pty-exit-status pty) code)))))))
 
 (defun pty-close (pty)
   "Close the fd, hang the child up, reap it, and free argv and envp.

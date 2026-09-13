@@ -18,6 +18,10 @@
   (sampler nil)
   (margin 8.0 :type single-float)
   (title nil)
+  ;; The bell count last seen on the main thread.  VT-BELL-COUNT is incremented
+  ;; by the reader thread, and the difference is how many bells arrived since
+  ;; the last frame.
+  (bells-seen 0 :type unsigned-byte)
   (selection nil)
   (dragging nil)
   (scale 1 :type (integer 1 16))
@@ -73,6 +77,7 @@ them in that order and separately."
       ;; from having to reach AppKit at all -- which is one fewer thing that can
       ;; be wrong about threads.
       (update-session-title session)
+      (ring-pending-bells session)
       (let* ((terminal (session-terminal session))
              (snapshot (crt.terminal:terminal-snapshot terminal))
              (renderer (session-renderer session))
@@ -126,6 +131,27 @@ quantisation everything else animated in this program uses.")
     (when (and title (not (equal title (session-title session))))
       (setf (session-title session) title)
       (objc:invoke (crt-window-handle (session-window session)) "setTitle:" title))))
+
+(defun ring-pending-bells (session)
+  "Sound the bells the child asked for since the last frame.
+
+POLLED on the main thread rather than rung from the callback, for the same
+reason the title is: the bell callback runs on the reader thread, and NSBeep is
+AppKit.
+
+Coalesced to at most one beep per frame on purpose.  A program that emits a
+hundred BELs -- a `cat' over a binary is the classic -- would otherwise queue a
+hundred system sounds and go on making noise long after it finished.  Counting
+them and beeping once is what a terminal is expected to do.
+
+An audible bell rather than a visual flash because upstream's is Konsole's, in
+qmltermwidget, which is not in this tree to read; a beep is the behaviour
+everything else on this machine has."
+  (let* ((terminal (session-terminal session))
+         (count (and terminal (crt.terminal:terminal-bell-count terminal))))
+    (when (and count (> count (session-bells-seen session)))
+      (setf (session-bells-seen session) count)
+      (objc:invoke "NSSound" "beep"))))
 
 (defun blit-to-drawable (session source texture drawable)
   "Copy the text target to the window.
@@ -323,6 +349,7 @@ whatever size the window is dragged to."
                     :double (lambda (event) (handle-double-click session event))
                     :right-down (lambda (event) (show-context-menu session event))
                     :wheel (lambda (event) (handle-scroll-wheel session event))))
+        (apply-session-opacity session)
         (push session *sessions*)
         (show-crt-window window)
         session)))))
@@ -465,6 +492,18 @@ change on both kinds of face."
       (crt.terminal:terminal-report-mouse terminal :button (if up 4 5)
                                                    :pressed t))))
 
+(defun apply-session-opacity (session)
+  "Make the window as solid as SESSION's profile asks for.
+
+The shader has been emitting a premultiplied alpha below 1 for translucent
+profiles since the dynamic pass was written, and an opaque layer threw it away
+every frame -- so windowOpacity was a setting that did nothing, and looked from
+the inside like a setting that worked."
+  (let ((profile (session-profile session)))
+    (when profile
+      (set-view-opaque (session-view session)
+                       (not (crt.settings:window-transparent-p profile))))))
+
 (defun set-session-profile (session name)
   "Switch profiles.  The pipelines for the new specialisation compile once."
   (let ((profile (or (crt.settings:find-profile name)
@@ -475,6 +514,7 @@ change on both kinds of face."
     ;; The face and the margin are the profile's too, so switching look means
     ;; rebuilding the renderer -- not only re-specialising the shaders.
     (setf (session-margin session) (float (crt.settings:margin profile) 1.0))
+    (apply-session-opacity session)
     (apply-font-scaling session)
     profile))
 
