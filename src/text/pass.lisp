@@ -206,8 +206,20 @@ what a terminal defaulting to 80x25 wants."
           (values (/ fr 255.0) (/ fg 255.0) (/ fb 255.0)
                   (/ br 255.0) (/ bg 255.0) (/ bb 255.0))))))
 
+(defun rule (buffer n solid r g b x y w h)
+  "A filled rectangle, sampling the atlas's solid block.
+
+Underlines, strikethroughs and the cursor are all this.  Reusing the solid slot
+rather than a second untextured pipeline is what keeps the whole text pass to
+one pipeline, one texture binding and one draw."
+  (write-instance buffer n r g b 1.0 x y w h
+                  (glyph-u0 solid) (glyph-v0 solid)
+                  (glyph-u1 solid) (glyph-v1 solid))
+  (1+ n))
+
 (defun build-instances (renderer snapshot &key (default-fg '(229 229 229))
-                                               (default-bg '(0 0 0)))
+                                               (default-bg '(0 0 0))
+                                               (blink-on t) (cursor-on t))
   "Fill the instance buffer from SNAPSHOT.  Returns the instance count.
 
 Backgrounds first, then glyphs: within one draw call Metal respects primitive
@@ -258,8 +270,18 @@ second pass."
             ;; side.
             (when (and (plusp (vt:cell-width cell))
                        (not (vt:cell-blank-p cell))
-                       (not (vt:attr-set-p (vt:cell-attrs cell) vt:+attr-conceal+)))
-              (let ((glyph (atlas-glyph atlas font (vt:cell-char cell))))
+                       (not (vt:attr-set-p (vt:cell-attrs cell) vt:+attr-conceal+))
+                       ;; Blink hides the INK, never the background: a blinking
+                       ;; cell that dropped its background would flash a hole in
+                       ;; a coloured region rather than blinking its text.
+                       (or blink-on
+                           (not (vt:attr-set-p (vt:cell-attrs cell)
+                                               vt:+attr-blink+))))
+              (let* ((attrs (vt:cell-attrs cell))
+                     (glyph (atlas-glyph atlas font (vt:cell-char cell)
+                                         :bold (vt:attr-set-p attrs vt:+attr-bold+)
+                                         :italic (vt:attr-set-p attrs
+                                                                vt:+attr-italic+))))
                 (when (plusp (glyph-width glyph))
                   (multiple-value-bind (fr fg fb) (cell-colors cell default-fg default-bg)
                     (write-instance
@@ -271,8 +293,51 @@ second pass."
                      (glyph-u0 glyph) (glyph-v0 glyph)
                      (glyph-u1 glyph) (glyph-v1 glyph))
                     (incf n)))))))))
+    ;; Underlines and strikethroughs, as rules over the cells that asked for
+    ;; them.  A separate pass over the grid rather than interleaved with the
+    ;; glyphs, so that a rule is drawn OVER its glyph rather than under it --
+    ;; which is what a strikethrough means.
+    (dotimes (row rows)
+      (let ((line (aref cells row)))
+        (dotimes (col cols)
+          (let* ((cell (aref line col))
+                 (attrs (vt:cell-attrs cell)))
+            (when (and (plusp (vt:cell-width cell))
+                       (or (vt:attr-set-p attrs vt:+attr-underline+)
+                           (vt:attr-set-p attrs vt:+attr-strike+))
+                       (or blink-on (not (vt:attr-set-p attrs vt:+attr-blink+))))
+              (multiple-value-bind (fr fg fb) (cell-colors cell default-fg default-bg)
+                (let* ((x (+ margin (* col cw)))
+                       (w (* cw (max 1 (vt:cell-width cell))))
+                       (top (+ margin (* row ch)))
+                       ;; One device pixel at 1x, two at 2x: a rule that stays
+                       ;; one pixel under magnification disappears next to
+                       ;; glyphs whose strokes grew with it.
+                       (thickness (max 1.0 scale)))
+                  (when (vt:attr-set-p attrs vt:+attr-strike+)
+                    (setf n (rule buffer n solid fr fg fb
+                                  x (+ top (* 0.55 ascent)) w thickness)))
+                  (when (vt:attr-set-p attrs vt:+attr-underline+)
+                    (let ((y (+ top ascent thickness)))
+                      (ecase (vt:cell-underline-style attrs)
+                        ((0 1) (setf n (rule buffer n solid fr fg fb x y w thickness)))
+                        (2 ;; Double: two rules with a gap of one thickness.
+                           (setf n (rule buffer n solid fr fg fb x y w thickness))
+                           (setf n (rule buffer n solid fr fg fb x
+                                         (+ y (* 2 thickness)) w thickness)))
+                        (3 ;; Curly, as four dashes alternating by one thickness.
+                           ;; Not a sine -- at one or two pixels of amplitude a
+                           ;; sine and a square wave are the same picture, and
+                           ;; this is four instances instead of a shader.
+                           (let ((dash (/ w 4.0)))
+                             (dotimes (i 4)
+                               (setf n (rule buffer n solid fr fg fb
+                                             (+ x (* i dash))
+                                             (+ y (if (evenp i) 0.0 thickness))
+                                             dash thickness)))))))))))))))
     ;; The cursor, as a block over the cell it is on.
     (when (and (term:snapshot-cursor-visible snapshot)
+               cursor-on
                (< (term:snapshot-cursor-row snapshot) rows)
                (< (term:snapshot-cursor-col snapshot) cols))
       (write-instance buffer n 0.75 0.75 0.75 0.65
@@ -287,11 +352,13 @@ second pass."
 ;;; The pass -------------------------------------------------------------------
 
 (defun render-text (renderer snapshot &key (buffer nil) (default-fg '(229 229 229))
-                                           (default-bg '(0 0 0)))
+                                           (default-bg '(0 0 0)) (blink-on t)
+                                           (cursor-on t))
   "Draw SNAPSHOT into the renderer's target.  Returns the target."
   (let* ((target (text-renderer-target renderer))
          (count (build-instances renderer snapshot
-                                 :default-fg default-fg :default-bg default-bg)))
+                                 :default-fg default-fg :default-bg default-bg
+                                 :blink-on blink-on :cursor-on cursor-on)))
     ;; BEFORE the pass, always: a glyph seen for the first time this frame was
     ;; allocated a slot while instances were being built, and a draw that
     ;; sampled it before the upload would read whatever was in the atlas before.

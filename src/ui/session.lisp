@@ -72,9 +72,18 @@ them in that order and separately."
              ;; through convertWithChroma.  White on black is deliberate: the
              ;; profile's foreground and background are applied in the DYNAMIC
              ;; pass, and painting them here as well would apply them twice.
-             (target (crt.text:render-text renderer snapshot
-                                           :default-fg '(255 255 255)
-                                           :default-bg '(0 0 0))))
+             (clock (view-effect-time view))
+             (target (crt.text:render-text
+                      renderer snapshot
+                      :default-fg '(255 255 255)
+                      :default-bg '(0 0 0)
+                      :blink-on (blink-phase clock)
+                      ;; A cursor that does not blink is always on.  The profile
+                      ;; decides, and thirteen of the fourteen say no -- a
+                      ;; steady block is what a phosphor tube looks like.
+                      :cursor-on (or (not (crt.settings:profile-blinking-cursor
+                                           (session-profile session)))
+                                     (blink-phase clock)))))
         (multiple-value-bind (vw vh) (crt.text:text-renderer-virtual-size renderer)
          (if (and (session-effects session) (session-graph session))
             (crt.effects:render-effects
@@ -88,6 +97,17 @@ them in that order and separately."
              ;; does, which is to switch rasterisation off everywhere.
              :virtual-width vw :virtual-height vh)
             (blit-to-drawable session target texture drawable)))))))
+
+(defconstant +blink-period+ 1.0d0
+  "Seconds for a full blink cycle: half on, half off.
+
+Driven by the EFFECT clock, which is frame-skipped to about 20Hz, so the
+transition lands on an effect tick rather than on a frame -- the same
+quantisation everything else animated in this program uses.")
+
+(defun blink-phase (time)
+  "True during the lit half of the blink cycle."
+  (< (mod time +blink-period+) (/ +blink-period+ 2)))
 
 (defun update-session-title (session)
   (let ((title (crt.terminal:terminal-title (session-terminal session))))

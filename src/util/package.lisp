@@ -115,7 +115,7 @@
    #:cell-blank-p
    #:+attr-bold+ #:+attr-underline+ #:+attr-italic+ #:+attr-blink+
    #:+attr-reverse+ #:+attr-conceal+ #:+attr-strike+
-   #:attr-set-p #:cell-underline-style
+   #:attr-set-p #:cell-underline-style #:+attr-underline-shift+
    ;; colours
    #:vt-color #:vt-color-p #:vt-color-indexed-p #:vt-color-index
    #:vt-color-red #:vt-color-green #:vt-color-blue

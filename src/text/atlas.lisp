@@ -100,8 +100,15 @@ the rasteriser rounds."
 
 (defconstant +alpha-only+ 7 "kCGImageAlphaOnly.")
 
-(defun rasterise-glyph (atlas font character)
-  "Draw CHARACTER into the atlas and return its GLYPH.  Main thread only."
+(defun rasterise-glyph (atlas font character &key bold italic)
+  "Draw CHARACTER into the atlas and return its GLYPH.  Main thread only.
+
+BOLD and ITALIC are SYNTHESISED rather than taken from another face, because
+these faces do not have one: PxPlus_IBM_VGA_8x16 and PetMe ship a single weight
+and no oblique, which is true of every bitmap font here and of most of the
+outline ones as we bundle them.  Emboldening by drawing twice a pixel apart and
+slanting by shearing the pen are what a terminal has always done when the face
+had nothing else to offer, and it is what qmltermwidget does too."
   (metal:with-metal
     (let ((glyph-id (glyph-for-character font character)))
       (if (zerop glyph-id)
@@ -111,7 +118,14 @@ the rasteriser rounds."
           (make-glyph :advance (float (font-cell-width font) 1.0))
           (multiple-value-bind (bx by bw bh) (font-glyph-bounds font glyph-id)
             (let* ((pad 1)
-                   (width (+ (ceiling bw) (* 2 pad)))
+                   ;; Bold widens the ink by one pixel and italic leans it over
+                   ;; by up to a third of its height, so the box grows to match
+                   ;; or the emboldened right edge and the slanted top are
+                   ;; clipped -- which looks like a broken font rather than a
+                   ;; box that is one pixel too small.
+                   (extra-x (+ (if bold 1 0)
+                               (if italic (ceiling (* 0.25 (ceiling bh))) 0)))
+                   (width (+ (ceiling bw) (* 2 pad) extra-x))
                    (height (+ (ceiling bh) (* 2 pad)))
                    (advance (font-advance font glyph-id)))
               (if (or (<= width (* 2 pad)) (<= height (* 2 pad)))
@@ -120,7 +134,8 @@ the rasteriser rounds."
                   (multiple-value-bind (x y) (atlas-allocate atlas width height)
                     (draw-glyph-into atlas font glyph-id x y width height
                                      (- (floor bx) pad)
-                                     (- (+ (floor by) (ceiling bh)) (- pad)))
+                                     (- (+ (floor by) (ceiling bh)) (- pad))
+                                     :bold bold :italic italic)
                     (setf (atlas-dirty atlas) t)
                     (let ((w (float (atlas-width atlas)))
                           (h (float (atlas-height atlas))))
@@ -137,7 +152,8 @@ the rasteriser rounds."
                                                     1.0)
                                   :advance (float advance 1.0)))))))))))
 
-(defun draw-glyph-into (atlas font glyph-id x y width height origin-x origin-y)
+(defun draw-glyph-into (atlas font glyph-id x y width height origin-x origin-y
+                        &key bold italic)
   "Rasterise GLYPH-ID into ATLAS's pixel array at X, Y."
   (let ((bytes (* width height)))
     (cffi:with-foreign-object (bitmap :uint8 bytes)
@@ -162,7 +178,17 @@ the rasteriser rounds."
                  (cffi:foreign-funcall "CTFontDrawGlyphs"
                                        :pointer (font-handle font)
                                        :pointer glyphs :pointer positions
-                                       :unsigned-long 1 :pointer context :void))
+                                       :unsigned-long 1 :pointer context :void)
+                 (when bold
+                   ;; Drawn again one pixel to the right.  Not a heavier face --
+                   ;; there is not one -- but the same trick every terminal has
+                   ;; used for the same reason.
+                   (setf (cffi:mem-aref positions :double 0)
+                         (float (- 1 origin-x) 1d0))
+                   (cffi:foreign-funcall "CTFontDrawGlyphs"
+                                         :pointer (font-handle font)
+                                         :pointer glyphs :pointer positions
+                                         :unsigned-long 1 :pointer context :void)))
             (cffi:foreign-funcall "CGContextRelease" :pointer context :void))
           ;; MEASURED, not reasoned about.  CoreGraphics DRAWS with the origin
           ;; at the bottom left, which invites the conclusion that the rows come
@@ -172,23 +198,43 @@ the rasteriser rounds."
           ;; line was in the right place, every glyph was in the right cell, and
           ;; every letterform was mirrored -- which looks far more like a
           ;; texture-coordinate bug than like what it was.
-          (let ((pixels (atlas-pixels atlas)) (aw (atlas-width atlas)))
+          ;;
+          ;; ITALIC IS SHEARED HERE, in the row copy, rather than by the text
+          ;; matrix.  CGContextSetTextMatrix takes a CGAffineTransform BY VALUE:
+          ;; six doubles, which is more than the four an AAPCS64 homogeneous
+          ;; float aggregate may have, so it is passed INDIRECTLY -- and a
+          ;; cffi:foreign-funcall handing over six loose doubles puts them in
+          ;; the wrong registers entirely.  The call did nothing, silently, and
+          ;; the test caught it only because a sheared M has the same ink as an
+          ;; upright one and I had to look at why.
+          ;;
+          ;; Shearing the bitmap needs no ABI at all: row 0 is the top and
+          ;; leans furthest right, the bottom row not at all.
+          (let ((pixels (atlas-pixels atlas))
+                (aw (atlas-width atlas))
+                (slant (if italic 0.25 0.0)))
             (dotimes (row height)
               (let ((source (* row width))
-                    (destination (+ (* (+ y row) aw) x)))
+                    (destination (+ (* (+ y row) aw) x))
+                    (shift (round (* slant (- height 1 row)))))
                 (dotimes (col width)
-                  (setf (aref pixels (+ destination col))
-                        (cffi:mem-aref bitmap :uint8 (+ source col))))))))))))
+                  (let ((target (+ col shift)))
+                    (when (< target width)
+                      (setf (aref pixels (+ destination target))
+                            (cffi:mem-aref bitmap :uint8 (+ source col))))))))))))))
 
-(defun atlas-glyph (atlas font character)
+(defun atlas-glyph (atlas font character &key bold italic)
   "CHARACTER's glyph, rasterising it on first sight.
 
-Keyed on the font's handle as well as the character: two faces, or the same face
-at two sizes, are different fonts and must not share entries."
-  (let ((key (cons (cffi:pointer-address (font-handle font)) (char-code character))))
+Keyed on the font's handle AND the style as well as the character: two faces, or
+the same face at two sizes, are different fonts, and a bold A is a different
+picture from a plain one."
+  (let ((key (list (cffi:pointer-address (font-handle font))
+                   (char-code character)
+                   (and bold t) (and italic t))))
     (or (gethash key (atlas-glyphs atlas))
         (setf (gethash key (atlas-glyphs atlas))
-              (rasterise-glyph atlas font character)))))
+              (rasterise-glyph atlas font character :bold bold :italic italic)))))
 
 (defun atlas-flush (atlas)
   "Upload anything newly rasterised.

@@ -63,8 +63,16 @@ install-headers: $(HEADERS)
 check: $(DYLIB)
 	@echo "otool -L $(DYLIB):"
 	@otool -L $(DYLIB) | tail -n +2
-	@otool -L $(DYLIB) | tail -n +2 | awk '{print $$1}' \
-	  | grep -v '^/usr/lib/' | grep -v '^/System/' | grep -v "^@rpath/lib$(NAME).dylib$$" \
+	@# The library's OWN install name is the first entry otool -L prints for a
+	@# dylib, and it is not a dependency.  It is excluded by asking otool -D
+	@# what it is rather than by matching a literal, which is what broke when
+	@# the install name changed from @rpath/libcathode.dylib to a bare name:
+	@# the filter still named the old form, so the library reported itself as
+	@# an external dependency and the guard failed on a correct build.
+	@install=$$(otool -D $(DYLIB) | tail -1); \
+	 otool -L $(DYLIB) | tail -n +2 | awk '{print $$1}' \
+	  | grep -v -F -x "$$install" \
+	  | grep -v '^/usr/lib/' | grep -v '^/System/' \
 	  | grep . && { echo "error: links something outside /usr/lib and /System" >&2; exit 1; } \
 	  || echo "ok: nothing outside /usr/lib and /System"
 	@nm -gU $(DYLIB) | grep -c ' T _' | xargs -I{} echo "{} exported symbols"

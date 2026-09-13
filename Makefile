@@ -174,7 +174,9 @@ define check-links
 	@fail=0; \
 	for bin in "$(1)/Contents/MacOS/"* "$(1)/Contents/Frameworks/"*.dylib; do \
 	  [ -f "$$bin" ] || continue; \
-	  otool -L "$$bin" | tail -n +2 | awk '{print $$1}' | while read dep; do \
+	  self=$$(otool -D "$$bin" 2>/dev/null | tail -1); \
+	  otool -L "$$bin" | tail -n +2 | awk '{print $$1}' \
+	    | grep -v -F -x "$${self:-/dev/null}" | while read dep; do \
 	    case "$$dep" in \
 	      /usr/lib/*|/System/*) ;; \
 	      @loader_path/*|@rpath/*|@executable_path/*) \

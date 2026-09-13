@@ -295,3 +295,130 @@ which looks like a font problem rather than an arithmetic one."
                        "ink spilled onto the second row"))
               (crt.text:release-text-renderer renderer)
               (crt.text:release-font font)))))))
+
+(defun attr-snapshot (renderer string attrs)
+  "STRING on row 0 with ATTRS on every cell."
+  (let ((snapshot (snapshot-of renderer string)))
+    (loop for i from 0 below (length string)
+          do (setf (crt.vt:cell-attrs (aref (aref (crt.terminal:snapshot-cells snapshot) 0) i))
+                   attrs))
+    snapshot))
+
+(defun ink-count (pixels texture x0 y0 x1 y1)
+  "Lit pixels in the box, counting the RED channel only.
+
+So the background must be chosen with red at or near zero, or it is counted as
+ink -- which is how the blink test first came back reporting 128 against 128
+with a (40 0 0) background."
+  (loop for y from y0 below (min y1 (crt.metal:texture-height texture))
+        sum (loop for x from x0 below (min x1 (crt.metal:texture-width texture))
+                  count (> (first (crt.metal:texture-pixel pixels texture x y)) 8))))
+
+(test bold-and-italic-are-synthesised
+  "These faces ship one weight and no oblique, so both are made rather than
+chosen: emboldening draws twice a pixel apart, italic shears the pen.  A bold
+glyph must therefore have strictly more ink than a plain one."
+  (when (gpu-or-skip)
+    (with-text-renderer (renderer font :width 256 :height 128)
+      (flet ((ink-for (attrs)
+               (let* ((target (crt.text:render-text
+                               renderer (attr-snapshot renderer "M" attrs)
+                               :default-fg '(255 255 255) :default-bg '(0 0 0)))
+                      (pixels (crt.metal:texture-bytes target))
+                      (cw (ceiling (crt.text:text-renderer-cell-width renderer)))
+                      (ch (ceiling (crt.text:text-renderer-cell-height renderer))))
+                 ;; Two cells wide: a bold or slanted M may lean into the next.
+                 (ink-count pixels target 0 0 (* 2 cw) ch))))
+        (let ((plain (ink-for 0))
+              (bold (ink-for crt.vt:+attr-bold+))
+              (italic (ink-for crt.vt:+attr-italic+)))
+          (is (plusp plain) "the plain glyph rendered")
+          (is (> bold plain) "bold must add ink: ~D vs ~D" bold plain)
+          (is (plusp italic) "italic rendered: ~D" italic))))))
+
+(test italic-leans
+  "Asserted by POSITION, not by ink count.
+
+A sheared glyph has the same number of lit pixels as an upright one -- the first
+version of this test compared counts and passed while the shear was doing
+nothing at all.  What a shear actually does is move the TOP rows to the right,
+so that is what is measured: the mean x of the top third against the bottom
+third."
+  (when (gpu-or-skip)
+    (with-text-renderer (renderer font :width 256 :height 128)
+      (flet ((lean (attrs)
+               (let* ((target (crt.text:render-text
+                               renderer (attr-snapshot renderer "M" attrs)
+                               :default-fg '(255 255 255) :default-bg '(0 0 0)))
+                      (pixels (crt.metal:texture-bytes target))
+                      (cw (* 2 (ceiling (crt.text:text-renderer-cell-width renderer))))
+                      (ch (ceiling (crt.text:text-renderer-cell-height renderer)))
+                      (ascent (round (* (crt.text:text-renderer-scale renderer)
+                                        (crt.text:font-ascent font)))))
+                 (flet ((mean-x (y0 y1)
+                          (let ((sum 0) (count 0))
+                            (loop for y from (max 0 y0) below (min y1 ch)
+                                  do (loop for x from 0 below cw
+                                           when (> (first (crt.metal:texture-pixel
+                                                           pixels target x y)) 8)
+                                             do (incf sum x) (incf count)))
+                            (if (plusp count) (/ sum (float count)) 0.0))))
+                   (- (mean-x 0 (floor ascent 3))
+                      (mean-x (floor (* 2 ascent) 3) ascent))))))
+        (let ((upright (lean 0))
+              (slanted (lean crt.vt:+attr-italic+)))
+          (is (> slanted upright)
+              "an italic M must lean: its top is ~,1F px right of its bottom, ~
+               against ~,1F upright" slanted upright))))))
+
+(test underline-and-strikethrough-are-drawn
+  "Decoded since M2a and drawn by nothing until now.
+
+The atlas reserves a solid block precisely so these can be quads in the same
+pipeline as the glyphs -- the comment saying so predates the code that uses it."
+  (when (gpu-or-skip)
+    (with-text-renderer (renderer font :width 256 :height 128)
+      (flet ((ink-for (attrs)
+               (let* ((target (crt.text:render-text
+                               renderer (attr-snapshot renderer "    " attrs)
+                               :default-fg '(255 255 255) :default-bg '(0 0 0)))
+                      (pixels (crt.metal:texture-bytes target))
+                      (cw (ceiling (crt.text:text-renderer-cell-width renderer)))
+                      (ch (ceiling (crt.text:text-renderer-cell-height renderer))))
+                 ;; SPACES, so any ink at all is the rule and not a glyph.
+                 (ink-count pixels target 0 0 (* 4 cw) ch))))
+        (is (zerop (ink-for 0)) "four spaces with no attributes draw nothing")
+        (is (plusp (ink-for crt.vt:+attr-underline+))
+            "an underline on blank cells must still draw")
+        (is (plusp (ink-for crt.vt:+attr-strike+))
+            "and so must a strikethrough")
+        (let ((single (ink-for (logior crt.vt:+attr-underline+
+                                       (ash 1 crt.vt:+attr-underline-shift+))))
+              (double (ink-for (logior crt.vt:+attr-underline+
+                                       (ash 2 crt.vt:+attr-underline-shift+)))))
+          (is (> double single) "a double underline has more ink than a single: ~
+                                 ~D vs ~D" double single))))))
+
+(test blink-hides-ink-but-never-the-background
+  "A blinking cell that dropped its background would flash a hole in a coloured
+region rather than blinking its text."
+  (when (gpu-or-skip)
+    (with-text-renderer (renderer font :width 128 :height 64)
+      (let* ((attrs crt.vt:+attr-blink+)
+             (on (crt.text:render-text renderer (attr-snapshot renderer "M" attrs)
+                                       :default-fg '(255 255 255)
+                                       :default-bg '(0 0 40) :blink-on t))
+             (on-pixels (crt.metal:texture-bytes on))
+             (cw (ceiling (crt.text:text-renderer-cell-width renderer)))
+             (ch (ceiling (crt.text:text-renderer-cell-height renderer)))
+             (on-ink (ink-count on-pixels on 0 0 cw ch)))
+        (let* ((off (crt.text:render-text renderer (attr-snapshot renderer "M" attrs)
+                                          :default-fg '(255 255 255)
+                                          :default-bg '(0 0 40) :blink-on nil))
+               (off-pixels (crt.metal:texture-bytes off))
+               (off-ink (ink-count off-pixels off 0 0 cw ch)))
+          (is (plusp on-ink) "lit half of the cycle draws the glyph")
+          (is (< off-ink on-ink) "dark half draws less: ~D vs ~D" off-ink on-ink)
+          ;; The background is still there: alpha stays opaque.
+          (is (= 255 (fourth (crt.metal:texture-pixel off-pixels off 1 1)))
+              "the background must survive the dark half"))))))
