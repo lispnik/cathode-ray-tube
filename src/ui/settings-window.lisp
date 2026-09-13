@@ -197,7 +197,13 @@ would be porting the workaround instead of the feature."
   "SettingsTerminalTab.qml: where the glyphs come from and what colour they are."
   (let* ((session (settings-window-session window))
          (profile (settings-window-profile window))
-         (bundled (crt.text:bundled-font-display-names))
+         (rasterization (max 0 (min 4 (crt.settings:profile-rasterization profile))))
+         ;; The Name list is filtered by the RENDERING mode, which is upstream's
+         ;; `modernMode == !font.lowResolutionFont' (fontmanager.cpp:441).  The
+         ;; sixteen bitmap faces and the eight outline ones are never offered
+         ;; together: choosing a 32-pixel outline face in a profile that magnifies
+         ;; bitmaps by a whole number is a combination with no sensible rendering.
+         (bundled (crt.text:bundled-font-display-names :modern (= rasterization 4)))
          (system (crt.text:system-monospace-families))
          (source (if (eql 1 (crt.settings:profile-font-source profile)) 1 0))
          (names (if (= source 1) system bundled)))
@@ -228,15 +234,31 @@ would be porting the workaround instead of the feature."
                                             first-name)))))
                              (apply-profile-edit session :font t)
                              (refresh-settings-window window)))))
+       ;; Five modes, not two: 0 none, 1 scanlines, 2 pixels, 3 sub-pixels,
+       ;; 4 modern (ApplicationSettings.qml:104-108).  The first four all
+       ;; magnify a bitmap face and differ only in what the shader draws over it
+       ;; -- they are CRT_RASTER_MODE, which is a function constant -- while the
+       ;; fifth changes which faces exist.
        (list "Rendering"
-             (make-popup '("Default" "Modern")
-                         (min 1 (max 0 (crt.settings:profile-rasterization profile)))
+             (make-popup '("Default" "Scanlines" "Pixels" "Sub-pixels" "Modern")
+                         rasterization
                          (lambda (index name)
                            (declare (ignore name))
-                           (setf (crt.settings:profile-rasterization
-                                  (editable-profile session))
-                                 index)
-                           (apply-profile-edit session :font t))))
+                           (let ((p (editable-profile session)))
+                             (setf (crt.settings:profile-rasterization p) index)
+                             ;; Crossing into or out of Modern changes the list of
+                             ;; faces, so the name in hand may no longer be in it
+                             ;; -- upstream picks the first of the filtered list
+                             ;; in that case (fontmanager.cpp:453).
+                             (let ((offered (crt.text:bundled-font-display-names
+                                             :modern (= index 4))))
+                               (unless (member (font-display-name p) offered
+                                               :test #'string-equal)
+                                 (setf (crt.settings:profile-font-name p)
+                                       (crt.text:profile-name-for-display
+                                        (first offered)))))
+                             (apply-profile-edit session :font t)
+                             (refresh-settings-window window)))))
        (list "Name"
              (make-popup names
                          (or (position (font-display-name profile) names

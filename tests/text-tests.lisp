@@ -639,3 +639,33 @@ never reached")
                        "an unmapped character falls back to the face itself"))
               (dolist (font chain) (crt.text:release-font font))
               (crt.text:release-font pet)))))))
+
+(test the-rendering-mode-decides-which-faces-exist
+  "Sixteen bitmap faces or eight outline ones, never both.
+
+Upstream's filter is `modernMode == !font.lowResolutionFont'
+(fontmanager.cpp:441), and the settings window's Rendering pop-up is what sets
+it.  The two lists are disjoint because the combination has no sensible
+rendering: a 32-pixel outline face in a profile that magnifies bitmaps by a whole
+number would be rasterised once and then blown up, which is the one thing the
+whole low-resolution path exists to avoid.
+
+Names rather than keywords, because these are what a person picks from -- and
+Terminess is in BOTH lists under one name, which is upstream's own doing: the
+scaled and unscaled entries are the same design offered twice, and the filter is
+what keeps them apart."
+  (let ((retro (crt.text:bundled-font-display-names))
+        (modern (crt.text:bundled-font-display-names :modern t)))
+    (is (= 16 (length retro)) "sixteen low-resolution faces, got ~D" (length retro))
+    (is (= 8 (length modern)) "eight modern ones, got ~D" (length modern))
+    (is-true (member "Commodore PET" retro :test #'string=)
+             "PET is a bitmap design")
+    (is-true (member "Hack" modern :test #'string=) "Hack is an outline one")
+    (is-false (member "Commodore PET" modern :test #'string=)
+              "and must not be offered when rendering is Modern")
+    ;; The name a profile records has to survive the round trip, or picking a
+    ;; face from the list would write a fontName the other program cannot read.
+    (dolist (display (append retro modern))
+      (let ((wire (crt.text:profile-name-for-display display)))
+        (is-true (crt.text:font-for-profile-name wire)
+                 "~S records as ~S, which resolves to no face" display wire)))))
