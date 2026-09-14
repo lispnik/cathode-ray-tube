@@ -155,16 +155,33 @@ export CRT_SIGN_IDENTITY = $(SIGN_IDENTITY)
 #     --apple-id <you> --team-id <your team>
 # which prompts for an APP-SPECIFIC password from appleid.apple.com -- not your
 # Apple ID password.
-NOTARY_PROFILE ?= cathode-ray-tube
+NOTARY_PROFILE ?= cathode-ray-tube-app
 
 app: $(APP_STAMP)
 
-$(APP_STAMP): cathode-ray-tube-bundle.asd $(DYLIB) res/icon.png \
+# WHO SIGNED IT is part of what the bundle is, so changing SIGN_IDENTITY has to
+# rebuild.  It did not: the stamp depends on the sources, the identity is not a
+# source, and `make app SIGN_IDENTITY=...' over a current tree did nothing at
+# all.  You then got an ad-hoc signed bundle with no indication anything had
+# been ignored -- and found out from `make notarize', which refuses it, or from
+# Apple, which is slower.
+#
+# Recorded in a file, rewritten only when it actually changes so an unchanged
+# identity does not force a rebuild every time.
+SIGN_RECORD = build/.sign-identity
+
+.PHONY: $(SIGN_RECORD)
+$(SIGN_RECORD):
+	@mkdir -p build
+	@printf '%s' '$(SIGN_IDENTITY)' | cmp -s - $@ 2>/dev/null \
+	  || printf '%s' '$(SIGN_IDENTITY)' > $@
+
+$(APP_STAMP): cathode-ray-tube-bundle.asd $(DYLIB) res/icon.png $(SIGN_RECORD) \
               $(shell find src res/shaders -type f)
 	$(RUNLISP) --eval '(asdf:make :cathode-ray-tube-bundle)'
 	@mkdir -p build
 	@touch $(APP_STAMP)
-	@echo "built $(APP)"
+	@echo "built $(APP)$(if $(SIGN_IDENTITY), signed by $(SIGN_IDENTITY), (ad hoc))"
 
 # The settings window, every tab, into docs/settings/.  Needs a window server as
 # well as a GPU, because the controls are AppKit's rather than ours.
