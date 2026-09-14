@@ -12,41 +12,61 @@ what makes the thing a user actually downloads recognisable to Gatekeeper.
 Doing only the first leaves the download itself unrecognised, which is the
 version of this that looks like it worked.
 
-## Doing it by hand, once
+## The easy way: do it here
+
+Nothing about this needs CI. Your SBCL is already built
+`--without-sb-core-compression` and the bundle links only `/usr/lib/libSystem`,
+which is the only genuinely hard prerequisite.
 
 ```sh
-# The notary profile, stored once in your keychain.  It asks for an
-# APP-SPECIFIC password from appleid.apple.com -- not your Apple ID password.
+# Once, ever.  Asks for an APP-SPECIFIC password from appleid.apple.com --
+# not your Apple ID password.
 xcrun notarytool store-credentials cathode-ray-tube \
-  --apple-id you@example.com --team-id TEAMID
+  --apple-id you@example.com --team-id Q47YS469F2
 
+# Then, per release:
 make release SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+gh release create v0.1.0 dist/*.dmg
 ```
 
-`dist/cathode-ray-tube-<version>-<arch>.dmg` is then signed, notarised and
-stapled.
+`make release` signs, notarises, staples, and does the disk image too. That is
+the whole thing: one setup command and two per release.
 
-## Doing it in CI
+**What you give up is the Intel build**, and only that. There is no universal
+SBCL core, so a Mac can only build for its own architecture. If nobody has asked
+for an Intel build, ship `arm64` and add the other later.
 
-Push a `v*` tag. `.github/workflows/release.yml` builds both architectures,
-signs, notarises, staples and publishes. `workflow_dispatch` with
-`dry_run: true` builds and signs without notarising or publishing, which is how
-to check a change to the workflow without spending a version number.
+## Doing it in CI, if you want the Intel build too
 
-### Secrets
+Three secrets:
 
-| Secret | What it is |
+| secret | what |
 |---|---|
-| `MACOS_CERTIFICATE` | the Developer ID Application `.p12`, base64 encoded |
-| `MACOS_CERTIFICATE_PASSWORD` | its export password |
-| `MACOS_SIGN_IDENTITY` | `Developer ID Application: Your Name (TEAMID)` |
-| `KEYCHAIN_PASSWORD` | anything; it is a throwaway keychain the job deletes |
-| `APPLE_ID` | the Apple ID the team belongs to |
-| `APPLE_TEAM_ID` | the ten-character team identifier |
-| `APPLE_APP_PASSWORD` | an app-specific password from appleid.apple.com |
+| `MACOS_CERTIFICATE` | `base64 -i cert.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password you gave the `.p12` |
+| `APPLE_ID` | your Apple ID email |
+| `APPLE_APP_PASSWORD` | an app-specific password |
+
+(Four, strictly -- the certificate and its password travel together.)
+
+There used to be seven. The signing identity, the team id and the keychain
+password are all gone, because none of them was information anybody had to
+supply: the certificate knows its own identity string and its own team id, and
+the keychain password protects a keychain created and deleted inside one job, so
+the workflow generates one. Three fewer things to type wrong, each of whose
+failure mode was a fifty-minute build dying at the last step.
+
+Export the `.p12` from Keychain Access: **login** keychain, My Certificates,
+right-click the Developer ID Application entry, Export.
 
 ```sh
-base64 -i DeveloperID.p12 | pbcopy     # for MACOS_CERTIFICATE
+gh secret set MACOS_CERTIFICATE < <(base64 -i cert.p12)
+gh secret set MACOS_CERTIFICATE_PASSWORD
+gh secret set APPLE_ID
+gh secret set APPLE_APP_PASSWORD
+
+gh workflow run release.yml -f dry_run=true   # builds both, signs ad hoc
+git tag v0.1.0 && git push origin v0.1.0      # the real thing
 ```
 
 ## Three things that fail slowly

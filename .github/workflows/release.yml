@@ -139,14 +139,22 @@ jobs:
             echo "dry run: building ad-hoc signed, not notarising"
           fi
 
+      # THREE secrets, not seven.  The certificate knows its own identity string
+      # and its own team id, and the keychain password protects a keychain that
+      # is created and deleted inside one job -- so asking a person to write
+      # those three down was asking for three more chances to typo something
+      # whose failure mode is a fifty-minute build that dies at the last step.
       - name: Import the Developer ID
+        id: identity
         if: steps.signing.outputs.enabled == 'true'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
+          # Throwaway: this keychain exists for the length of this job and is
+          # deleted in an always() step below.
+          KEYCHAIN_PASSWORD="$(uuidgen)"
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
           security default-keychain -s build.keychain
@@ -161,26 +169,34 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" build.keychain >/dev/null
           security find-identity -v -p codesigning
+          # ASK the certificate who it is, rather than being told twice.
+          line=$(security find-identity -v -p codesigning \
+                 | grep "Developer ID Application" | head -1)
+          [ -n "$line" ] || { echo "::error::no Developer ID in the .p12" >&2; exit 1; }
+          identity=$(echo "$line" | sed -E 's/.*"(.*)"/\1/')
+          team=$(echo "$identity" | sed -E 's/.*\(([A-Z0-9]+)\)$/\1/')
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "team=$team" >> "$GITHUB_OUTPUT"
+          echo "signing as $identity (team $team)"
 
       - name: Store the notary credentials
         if: steps.signing.outputs.enabled == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           # An APP-SPECIFIC password from appleid.apple.com, not the Apple ID
-          # password.
+          # password.  The team id comes from the certificate.
           xcrun notarytool store-credentials cathode-ray-tube \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+            --apple-id "$APPLE_ID" \
+            --team-id "${{ steps.identity.outputs.team }}" \
             --password "$APPLE_APP_PASSWORD" --keychain build.keychain
 
       # --- the artefact --------------------------------------------------------
 
       - name: Build the bundle
         env:
-          SIGN_IDENTITY: ${{ steps.signing.outputs.enabled == 'true'
-                             && secrets.MACOS_SIGN_IDENTITY || '' }}
+          SIGN_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: make app SIGN_IDENTITY="$SIGN_IDENTITY"
 
       - name: Check the bundle
@@ -189,13 +205,12 @@ jobs:
       - name: Notarise and staple the bundle
         if: steps.signing.outputs.enabled == 'true'
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          SIGN_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: make notarize SIGN_IDENTITY="$SIGN_IDENTITY"
 
       - name: Build the disk image
         env:
-          SIGN_IDENTITY: ${{ steps.signing.outputs.enabled == 'true'
-                             && secrets.MACOS_SIGN_IDENTITY || '' }}
+          SIGN_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: make dmg SIGN_IDENTITY="$SIGN_IDENTITY"
 
       # The DMG is notarised and stapled IN ITS OWN RIGHT.  Stapling only the
@@ -204,7 +219,7 @@ jobs:
       - name: Notarise and staple the disk image
         if: steps.signing.outputs.enabled == 'true'
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          SIGN_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: make notarize-dmg SIGN_IDENTITY="$SIGN_IDENTITY"
 
       - name: Upload the disk image
