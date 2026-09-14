@@ -679,5 +679,24 @@ horizontal scroller it should not have" label (aref ff 2) (aref sf 2))))
                                200))
                           buttons)
                    "each must be the width of its title, not the width of the
-window")))
+window"))
+             ;; A control with a natural size must not be given the whole
+             ;; column.  For a colour well that is a matter of looks -- 330
+             ;; points of flat orange reads as a progress bar.  For a CHECKBOX
+             ;; it is behaviour: an NSButton's hit area is its frame, so a
+             ;; full-column checkbox toggles when you click empty grey space
+             ;; three hundred points from its label.  Measured before the fix:
+             ;; "Blinking cursor" was 113 points of control in a 484-point frame.
+             (dolist (spec '(("Terminal" "NSColorWell" 80)
+                             ("Advanced" "NSButton" 320)))
+               (destructuring-bind (tab class limit) spec
+                 (let ((controls (tab-controls window tab class)))
+                   (is-true controls "~A has no ~A to check" tab class)
+                   (dolist (control controls)
+                     (let ((width (aref (objc:invoke-into (vector 0d0 0d0 0d0 0d0)
+                                                          control "frame")
+                                        2)))
+                       (is (<= width limit)
+                           "~A: a ~A is ~,0F wide, so it is taking the whole
+column rather than its own size" tab class width)))))))
         (crt.ui:end-session session)))))

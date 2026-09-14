@@ -219,7 +219,7 @@ would be porting the workaround instead of the feature."
                       (funcall writer hex (editable-profile session))
                       (apply-profile-edit session)))
                    nil
-                   crt.ui::+well-width+)))
+                   +well-width+)))
       (list
        (list :section "Font")
        (list "Source"
@@ -365,7 +365,8 @@ it is already in the View menu where this platform puts it."
                   (crt.settings:settings-use-custom-command settings)
                   (lambda (on)
                     (setf (crt.settings:settings-use-custom-command settings) on)
-                    (crt.settings:save-settings))))
+                    (crt.settings:save-settings)))
+             nil :natural)
        (list "Command"
              (make-text-field (crt.settings:settings-custom-command settings)
                               (lambda (text)
@@ -381,14 +382,16 @@ it is already in the View menu where this platform puts it."
                     (setf (crt.settings:profile-blinking-cursor
                            (editable-profile session))
                           on)
-                    (apply-profile-edit session))))
+                    (apply-profile-edit session)))
+             nil :natural)
        (list nil (make-checkbox
                   "Show the terminal size while resizing"
                   (crt.settings:settings-show-terminal-size settings)
                   (lambda (on)
                     (setf (crt.settings:settings-show-terminal-size settings) on)
                     (apply-overlay-setting)
-                    (crt.settings:save-settings))))
+                    (crt.settings:save-settings)))
+             nil :natural)
        (list :section "Quality")
        ;; Upstream calls this "Effects FPS" and shows 100/N as a percentage, so
        ;; the slider runs over the SKIP and the readout over the rate.  Keeping

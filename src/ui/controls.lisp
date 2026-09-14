@@ -206,6 +206,15 @@ the window -- a well stretched across a form looks like a progress bar.")
                (objc:objc-object-pointer child))
   child)
 
+(defun natural-width (control)
+  "What CONTROL asks to be, in points.
+
+-sizeToFit resizes it in place, which is exactly what we want for a control that
+is about to be given a frame anyway; the height is replaced by the caller."
+  (objc:invoke (objc:objc-object-pointer control) "sizeToFit")
+  (let ((frame (objc:invoke-into (vector 0d0 0d0 0d0 0d0) control "frame")))
+    (max 40 (ceiling (aref frame 2)))))
+
 (defun make-section-label (text)
   "A heading.  Small, bold, and the only thing in this window that is either."
   (let ((label (make-label text)))
@@ -240,9 +249,9 @@ look deliberate."
        ;; button ends up four hundred and sixty points wide.
        (let ((x +form-margin+))
          (dolist (control (rest row))
-           (objc:invoke (objc:objc-object-pointer control) "sizeToFit")
-           (let* ((frame (objc:invoke-into (vector 0d0 0d0 0d0 0d0) control "frame"))
-                  (w (max 84 (+ 20 (aref frame 2)))))
+           ;; Twenty points of padding on a push button, which is what makes
+           ;; "Save as..." look like a button rather than like its own title.
+           (let ((w (max 84 (+ 20 (natural-width control)))))
              (add-subview view (set-frame control x y w +control-height+))
              (incf x (+ w +group-gap+))))))
       (t
@@ -253,12 +262,19 @@ look deliberate."
                                         +label-width+ +label-height+)))
          (let* ((x (if label (+ +form-margin+ +label-width+ +gutter+) +form-margin+))
                 (trailing-width (if trailing (+ +readout-width+ +group-gap+) 0))
-                ;; FIXED-WIDTH for a control with a natural size.  A slider or a
-                ;; pop-up wants the whole column; a colour well does not, and
-                ;; stretching one across the form makes it look like a progress
-                ;; bar rather than a swatch.
-                (control-width (or fixed-width
-                                   (max 60 (- right x trailing-width)))))
+                ;; FIXED-WIDTH for a control with a natural size.  A slider or
+                ;; a pop-up wants the whole column; a colour well and a checkbox
+                ;; do not.  :NATURAL asks the control.
+                ;;
+                ;; A checkbox given the whole column is not merely ugly, it is
+                ;; WRONG: an NSButton's hit area is its frame, so "Blinking
+                ;; cursor" -- 113 points of box and title -- had a 484-point
+                ;; frame, and clicking empty grey space three hundred points to
+                ;; its right toggled the setting.
+                (control-width (case fixed-width
+                                 ((nil) (max 60 (- right x trailing-width)))
+                                 (:natural (natural-width control))
+                                 (t fixed-width))))
            (add-subview view (set-frame control x y control-width +control-height+))
            (when trailing
              (add-subview view (set-frame trailing (- right +readout-width+) (+ y 2)
@@ -271,10 +287,12 @@ A row is (LABEL CONTROL &optional TRAILING), or one of:
 
   (:section TEXT)        a small bold heading with air around it
   (:group c1 c2 ...)     controls side by side, each sized to its title
+  (:gap)                 half a row of nothing
 
-and a fourth element on an ordinary row fixes the control's width, for the ones
-with a natural size.
-  (:gap)                  half a row of nothing
+An ordinary row takes a fourth element that fixes its control's width: a number
+of points, or :NATURAL to ask the control.  Without it the control is given the
+whole column, which is right for a slider and wrong for anything with a size of
+its own.
 
 MINIMUM-HEIGHT keeps a short form filling its scroller, so that the background
 is uniform whether a tab has six rows or eleven.

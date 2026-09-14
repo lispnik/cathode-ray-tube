@@ -33,6 +33,7 @@ RUNLISP = $(LISP) --non-interactive --no-userinit --no-sysinit \
 
 .PHONY: all deps vendor check-vendor probe constants check-metal-constants \
         test test-no-bundle check-undefined run repl app icon check-app check-dist run-app \
+        settings-shot \
         install-app \
         notarize dmg notarize-dmg release gallery clean distclean
 
@@ -164,6 +165,14 @@ $(APP_STAMP): cathode-ray-tube-bundle.asd $(DYLIB) res/icon.png \
 	@mkdir -p build
 	@touch $(APP_STAMP)
 	@echo "built $(APP)"
+
+# The settings window, every tab, into docs/settings/.  Needs a window server as
+# well as a GPU, because the controls are AppKit's rather than ours.
+settings-shot: $(DYLIB)
+	$(RUNLISP) \
+	  --eval '(asdf:load-system :cathode-ray-tube)' \
+	  --load tools/settings-shot.lisp \
+	  --eval '(crt-settings-shot:render-all)'
 
 # Every profile, rendered headlessly into docs/gallery/.  Needs a GPU; needs no
 # window.  This is how the port is judged.
