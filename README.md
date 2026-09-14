@@ -24,7 +24,7 @@ them:
 | | | |
 |---|---|---|
 | ![Default Amber](docs/gallery/default-amber.png) Default Amber | ![Monochrome Green](docs/gallery/monochrome-green.png) Monochrome Green | ![Deep Blue](docs/gallery/deep-blue.png) Deep Blue |
-| ![Commodore 64](docs/gallery/commodore-64.png) Commodore 64 | ![Commodore PET](docs/gallery/commodore-pet.png) Commodore PET | ![Apple ][](docs/gallery/apple.png) Apple ][ |
+| ![Commodore 64](docs/gallery/commodore-64.png) Commodore 64 | ![Commodore PET](docs/gallery/commodore-pet.png) Commodore PET | ![Apple](docs/gallery/apple.png) Apple ][ |
 | ![Atari 400](docs/gallery/atari-400.png) Atari 400 | ![IBM VGA 8x16](docs/gallery/ibm-vga-8x16.png) IBM VGA 8x16 | ![IBM 3278 Reborn](docs/gallery/ibm-3278-reborn.png) IBM 3278 Reborn |
 | ![Neon Cyan](docs/gallery/neon-cyan.png) Neon Cyan | ![Ghost Terminal](docs/gallery/ghost-terminal.png) Ghost Terminal | ![Plasma](docs/gallery/plasma.png) Plasma |
 | ![Boring](docs/gallery/boring.png) Boring | ![E-Ink](docs/gallery/e-ink.png) E-Ink | |
