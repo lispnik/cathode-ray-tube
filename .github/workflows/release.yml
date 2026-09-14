@@ -120,8 +120,27 @@ jobs:
 
       # --- signing -------------------------------------------------------------
 
+      # ONE decision, made once.  Four steps used to repeat this condition, and
+      # the step that BUILDS did not -- so a dry run with the secrets configured
+      # skipped importing the certificate and then asked codesign to sign with
+      # it anyway.  That fails, and it fails exactly when a dry run is most
+      # useful: after you have set the secrets up and want to check them without
+      # notarising anything.  Now a dry run builds an ad-hoc-signed bundle, which
+      # exercises the build, the plist, the link guard and the disk image.
+      - name: Decide whether this run signs
+        id: signing
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] \
+             || [ "${{ inputs.dry_run }}" = "false" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "this run signs and notarises"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "dry run: building ad-hoc signed, not notarising"
+          fi
+
       - name: Import the Developer ID
-        if: github.event_name == 'push' || inputs.dry_run == false
+        if: steps.signing.outputs.enabled == 'true'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -144,7 +163,7 @@ jobs:
           security find-identity -v -p codesigning
 
       - name: Store the notary credentials
-        if: github.event_name == 'push' || inputs.dry_run == false
+        if: steps.signing.outputs.enabled == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -160,28 +179,30 @@ jobs:
 
       - name: Build the bundle
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          SIGN_IDENTITY: ${{ steps.signing.outputs.enabled == 'true'
+                             && secrets.MACOS_SIGN_IDENTITY || '' }}
         run: make app SIGN_IDENTITY="$SIGN_IDENTITY"
 
       - name: Check the bundle
         run: make check-app
 
       - name: Notarise and staple the bundle
-        if: github.event_name == 'push' || inputs.dry_run == false
+        if: steps.signing.outputs.enabled == 'true'
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: make notarize SIGN_IDENTITY="$SIGN_IDENTITY"
 
       - name: Build the disk image
         env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          SIGN_IDENTITY: ${{ steps.signing.outputs.enabled == 'true'
+                             && secrets.MACOS_SIGN_IDENTITY || '' }}
         run: make dmg SIGN_IDENTITY="$SIGN_IDENTITY"
 
       # The DMG is notarised and stapled IN ITS OWN RIGHT.  Stapling only the
       # app leaves the DOWNLOAD unrecognised, so the first thing a user touches
       # is the thing Gatekeeper complains about.
       - name: Notarise and staple the disk image
-        if: github.event_name == 'push' || inputs.dry_run == false
+        if: steps.signing.outputs.enabled == 'true'
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: make notarize-dmg SIGN_IDENTITY="$SIGN_IDENTITY"
