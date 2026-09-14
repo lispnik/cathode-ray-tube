@@ -700,3 +700,49 @@ window"))
                            "~A: a ~A is ~,0F wide, so it is taking the whole
 column rather than its own size" tab class width)))))))
         (crt.ui:end-session session)))))
+
+(test the-bell-actually-rings
+  "RING-PENDING-BELLS reaches AppKit without signalling.
+
+The bell was counted correctly and rung with +[NSSound beep], which does not
+exist.  The bridge resolves a method before sending it, so this failed loudly --
+`No method \"beep\" for object \"NSSound\"' -- rather than crashing, and the
+IMP's handler-case swallowed it.  The result: a log line on every bell, no
+sound, and a green suite.
+
+The suite missed it because THE-BELL-IS-COUNTED asserts the count the reader
+thread keeps, which is deliberately the half that never touches AppKit.  Nothing
+called the half that does until the application was built and run.
+
+So this calls it.  It cannot assert that a noise happened -- there is no way to
+ask -- but it asserts the thing that was actually wrong: that the call is one
+AppKit will accept.  NSBeep is a plain C function, which is why the guess was
+wrong; the check below would fail for +[NSSound beep] and passes for this."
+  (when (window-server-or-skip)
+    (crt.ui:ensure-appkit)
+    (is-true (cffi:foreign-symbol-pointer "NSBeep")
+             "NSBeep must exist as a C function, since that is what we call")
+    (is-false (objc:can-invoke-p "NSSound" "beep")
+              "and +[NSSound beep] must NOT, or this test is guarding nothing")
+    (let ((session (crt.ui:make-session
+                    :width 320 :height 200
+                    ;; The child rings twice; the session coalesces to one beep.
+                    :command '("/bin/sh" "-c" "printf 'a\\007b\\007'; sleep 10"))))
+      (unwind-protect
+           (let ((terminal (crt.ui:session-terminal session)))
+             (is-true (wait-for (lambda ()
+                                  (>= (crt.terminal:terminal-bell-count terminal) 2)))
+                      "the child's two BELs must be counted")
+             ;; The real assertion: driving it does not signal.  Before the fix
+             ;; this wrote "No method beep" to *error-output* from inside the
+             ;; frame and returned.
+             (let ((errors (make-string-output-stream)))
+               (let ((*error-output* errors))
+                 (finishes (crt.ui::ring-pending-bells session)))
+               (is (zerop (length (get-output-stream-string errors)))
+                   "ringing the bell must not complain: ~A"
+                   (get-output-stream-string errors)))
+             (is (= (crt.terminal:terminal-bell-count terminal)
+                    (crt.ui::session-bells-seen session))
+                 "and must mark them seen, so a hundred BELs are one noise"))
+        (crt.ui:end-session session)))))

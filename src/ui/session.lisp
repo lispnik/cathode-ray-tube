@@ -164,12 +164,19 @@ them and beeping once is what a terminal is expected to do.
 
 An audible bell rather than a visual flash because upstream's is Konsole's, in
 qmltermwidget, which is not in this tree to read; a beep is the behaviour
-everything else on this machine has."
+everything else on this machine has.
+
+NSBeep is a plain C FUNCTION, not a method on anything.  The obvious guess --
++[NSSound beep] -- does not exist, and the bridge says so rather than crashing:
+`No method \"beep\" for object \"NSSound\"'.  That was the guess, it shipped, and
+it fired on the first bell of the first run of the installed app; the suite
+missed it because the bell test asserts the COUNT the reader thread keeps and
+never reaches AppKit."
   (let* ((terminal (session-terminal session))
          (count (and terminal (crt.terminal:terminal-bell-count terminal))))
     (when (and count (> count (session-bells-seen session)))
       (setf (session-bells-seen session) count)
-      (objc:invoke "NSSound" "beep"))))
+      (cffi:foreign-funcall "NSBeep" :void))))
 
 (defun blit-to-drawable (session source texture drawable &key (present drawable))
   "Copy the text target to the window.
